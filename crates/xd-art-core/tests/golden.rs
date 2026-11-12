@@ -89,3 +89,13 @@ fn sampling_lanczos() {
 fn sampling_cluster() {
     check_sampling(SampleMode::Cluster, 0);
 }
+
+#[test]
+fn blur_matches_the_original_exactly() {
+    use xd_art_core::prep;
+    for (name, radius) in [("blur_0_5", 0.5), ("blur_1_5", 1.5), ("blur_4_25", 4.25)] {
+        let mut img = common::noise().to_work();
+        prep::box_blur(&mut img, radius, &Pool::new(), &Cancel::new()).unwrap();
+        assert_golden(name, 48, 40, &work_rgba(&img), 0);
+    }
+}
