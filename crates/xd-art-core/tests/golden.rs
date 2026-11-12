@@ -6,7 +6,45 @@
 
 mod common;
 
-use common::{assert_golden, diff, golden};
+use common::{assert_golden, diff, golden, work_rgba};
+use xd_art_core::buffer::Work;
+use xd_art_core::cancel::Cancel;
+use xd_art_core::pool::Pool;
+use xd_art_core::sampling;
+use xd_art_core::settings::SampleMode;
+
+/// Tolerance for float based filters, in 8-bit steps.
+const FLOAT_TOL: u8 = 1;
+
+fn sampled(src: &Work, w: u32, h: u32, mode: SampleMode, off: (f32, f32)) -> Work {
+    sampling::sample(src, w, h, mode, off, &Pool::new(), &Cancel::new()).unwrap()
+}
+
+fn check_sampling(mode: SampleMode, tol: u8) {
+    let noise = common::noise().to_work();
+    let grad = common::gradient().to_work();
+    let name = mode.name();
+    let a = sampled(&noise, 17, 13, mode, (0.0, 0.0));
+    assert_golden(&format!("sample_{name}_noise"), 17, 13, &work_rgba(&a), tol);
+    let b = sampled(&grad, 70, 50, mode, (0.3, -0.2));
+    assert_golden(
+        &format!("sample_{name}_up_offset"),
+        70,
+        50,
+        &work_rgba(&b),
+        tol,
+    );
+}
+
+#[test]
+fn sampling_nearest() {
+    check_sampling(SampleMode::Nearest, 0);
+}
+
+#[test]
+fn sampling_bilinear() {
+    check_sampling(SampleMode::Bilinear, FLOAT_TOL);
+}
 
 #[test]
 fn fixtures_match_the_harness() {
