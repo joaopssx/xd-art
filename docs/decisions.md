@@ -130,3 +130,16 @@ with a counting one (the only `unsafe` outside the engine proper, and test only)
 Cancellation is a shared atomic flag that stages check between rows. A stage result is
 stored only after the stage returns, so a cancelled run cannot leave a half written
 image behind; the previous result stays until a run completes.
+
+## 2026-11-12: opaque alpha is 255 << 7, not 0x7fff
+
+Found while matching Lanczos against the original: my first buffer code turned an
+opaque pixel into alpha `0x7fff` in the working format. The original converts every
+channel the same way, so opaque is `255 << 7 = 0x7f80`, while pixels outside the image
+in its filters are `0x7fff`. The difference only shows near edges after interpolation,
+where the two values mix, and it was enough to move alpha by two steps there. Fixed in the
+Lanczos commit, since that is where the golden test caught it.
+
+Lanczos weights are also not normalized in the original. A flat area comes out about 1%
+darker. xd-art keeps that, because changing it would break every comparison with the
+original; see [compat.md](compat.md).

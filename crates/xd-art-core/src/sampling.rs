@@ -106,6 +106,73 @@ fn row_bilinear(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
     }
 }
 
+#[inline]
+fn cubic(c: [f32; 4], t: f32) -> f32 {
+    // Catmull-Rom (a = -0.5), written in the same order as the original so the f32
+    // rounding comes out the same.
+    let a0 = -0.5 * c[0] + 1.5 * c[1] - 1.5 * c[2] + 0.5 * c[3];
+    let a1 = c[0] - 2.5 * c[1] + 2.0 * c[2] - 0.5 * c[3];
+    let a2 = -0.5 * c[0] + 0.5 * c[2];
+    let a3 = c[1];
+    a0 * t * t * t + a1 * t * t + a2 * t + a3
+}
+
+fn row_bicubic(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
+    let (iy, sy) = split(g.y(y));
+    for (x, o) in out.iter_mut().enumerate() {
+        let (ix, sx) = split(g.x(x as u32));
+        let mut p = [[OUTSIDE; 4]; 4];
+        for (r, row) in p.iter_mut().enumerate() {
+            for (c, px) in row.iter_mut().enumerate() {
+                *px = fetch(src, ix - 1 + c as i32, iy - 1 + r as i32);
+            }
+        }
+        for ch in 0..4 {
+            let rows = p.map(|row| cubic(row.map(|px| f32::from(px[ch])), sx));
+            o[ch] = store(cubic(rows, sy));
+        }
+    }
+}
+
+/// Lanczos kernel with 3 lobes.
+#[inline]
+fn lanczos3(v: f32) -> f32 {
+    // The original spells pi as 3.14159265359f, which rounds to the same f32 as PI.
+    use std::f32::consts::PI;
+    if v == 0.0 {
+        return 1.0;
+    }
+    if !(-3.0..=3.0).contains(&v) {
+        return 0.0;
+    }
+    (3.0 * (PI * v).sin() * (PI * v / 3.0).sin()) / (PI * PI * v * v)
+}
+
+#[inline]
+fn dot6(w: &[f32; 6], v: [f32; 6]) -> f32 {
+    w[0] * v[0] + w[1] * v[1] + w[2] * v[2] + w[3] * v[3] + w[4] * v[4] + w[5] * v[5]
+}
+
+fn row_lanczos(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
+    let (iy, sy) = split(g.y(y));
+    let wy = [sy + 2.0, sy + 1.0, sy, sy - 1.0, sy - 2.0, sy - 3.0].map(lanczos3);
+    for (x, o) in out.iter_mut().enumerate() {
+        let (ix, sx) = split(g.x(x as u32));
+        let wx = [sx + 2.0, sx + 1.0, sx, sx - 1.0, sx - 2.0, sx - 3.0].map(lanczos3);
+        let mut acc = [[0.0f32; 6]; 4];
+        for i in 0..6 {
+            let row: [Px; 6] =
+                std::array::from_fn(|c| fetch(src, ix - 2 + c as i32, iy - 2 + i as i32));
+            for (ch, a) in acc.iter_mut().enumerate() {
+                a[i] = dot6(&wx, row.map(|px| f32::from(px[ch])));
+            }
+        }
+        for ch in 0..4 {
+            o[ch] = store(dot6(&wy, acc[ch]));
+        }
+    }
+}
+
 /// Fills one output row.
 type RowFn = fn(&Work, &Grid, u32, &mut [Px]);
 
@@ -113,6 +180,8 @@ fn row_fn(mode: SampleMode) -> Result<RowFn> {
     match mode {
         SampleMode::Nearest => Ok(row_nearest),
         SampleMode::Bilinear => Ok(row_bilinear),
+        SampleMode::Bicubic => Ok(row_bicubic),
+        SampleMode::Lanczos => Ok(row_lanczos),
         other => Err(Error::Unsupported(format!(
             "sampling mode {}",
             other.name()
@@ -153,6 +222,7 @@ pub fn sample(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::float_cmp)] // kernel values at exact points
     use super::*;
     use crate::buffer::to15;
 
@@ -183,7 +253,12 @@ mod tests {
     #[test]
     fn single_pixel_source() {
         let src = Work::new(1, 1, [100, 200, 300, MAX15]).unwrap();
-        for mode in [SampleMode::Nearest, SampleMode::Bilinear] {
+        for mode in [
+            SampleMode::Nearest,
+            SampleMode::Bilinear,
+            SampleMode::Bicubic,
+            SampleMode::Lanczos,
+        ] {
             let out = run(&src, 3, 2, mode);
             assert_eq!(out.width, 3);
             assert_eq!(out.px[0][3], MAX15, "{mode:?}");
@@ -204,6 +279,35 @@ mod tests {
         assert_eq!(out.px[0][0], to15(10) / 2);
         // x = 1 samples at 1.5: columns 1 and 2.
         assert_eq!(out.px[1][0], u16::midpoint(to15(10), to15(20)));
+    }
+
+    #[test]
+    fn kernels_hit_their_known_points() {
+        assert_eq!(lanczos3(0.0), 1.0);
+        assert!(lanczos3(1.0).abs() < 1e-6);
+        assert!(lanczos3(2.0).abs() < 1e-6);
+        assert_eq!(lanczos3(3.5), 0.0);
+        assert!((lanczos3(0.5) - lanczos3(-0.5)).abs() < 1e-7);
+        // Catmull-Rom passes through the middle samples.
+        assert_eq!(cubic([1.0, 2.0, 3.0, 4.0], 0.0), 2.0);
+        assert!((cubic([1.0, 2.0, 3.0, 4.0], 1.0) - 3.0).abs() < 1e-6);
+        assert!((cubic([1.0, 2.0, 3.0, 4.0], 0.5) - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn flat_interior_stays_flat() {
+        let src = Work::new(32, 32, [1000, 2000, 3000, MAX15]).unwrap();
+        let p = run(&src, 8, 8, SampleMode::Bicubic).at(4, 4);
+        for c in 0..3 {
+            assert!(p[c].abs_diff(src.px[0][c]) <= 1, "{p:?}");
+        }
+        // The original does not normalize the Lanczos weights, and neither does xd-art
+        // (that would break compatibility), so a flat area comes out slightly darker.
+        let p = run(&src, 8, 8, SampleMode::Lanczos).at(4, 4);
+        for c in 0..3 {
+            let want = f32::from(src.px[0][c]);
+            assert!((f32::from(p[c]) - want).abs() / want < 0.02, "{p:?}");
+        }
     }
 
     #[test]

@@ -74,3 +74,13 @@ fn diff_reports_count_max_and_first() {
     );
     assert_eq!(diff(3, &a, &b, 5).count, 0);
 }
+
+#[test]
+fn sampling_bicubic() {
+    check_sampling(SampleMode::Bicubic, FLOAT_TOL);
+}
+
+#[test]
+fn sampling_lanczos() {
+    check_sampling(SampleMode::Lanczos, FLOAT_TOL);
+}

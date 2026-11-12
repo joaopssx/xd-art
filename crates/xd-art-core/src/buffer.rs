@@ -17,6 +17,10 @@ use crate::{Error, Result};
 /// Largest value of a channel in the working format.
 pub const MAX15: u16 = 0x7fff;
 
+/// Alpha of an opaque 8-bit pixel in the working format (`255 << 7`). The original
+/// converts this way too, so an opaque pixel is not quite [`MAX15`].
+pub const OPAQUE: u16 = to15(255);
+
 /// One pixel of the working format: red, green, blue, alpha, each `0..=MAX15`.
 pub type Px = [u16; 4];
 
@@ -249,7 +253,7 @@ impl Image {
             None => out.px.extend(
                 self.rgb
                     .chunks_exact(3)
-                    .map(|p| [to15(p[0]), to15(p[1]), to15(p[2]), MAX15]),
+                    .map(|p| [to15(p[0]), to15(p[1]), to15(p[2]), OPAQUE]),
             ),
         }
     }
@@ -471,7 +475,7 @@ mod tests {
         let cap = w.px.capacity();
         img.write_work(&mut w);
         assert_eq!(w.px.capacity(), cap);
-        assert_eq!(w.at(3, 3), [to15(10), to15(20), to15(30), MAX15]);
+        assert_eq!(w.at(3, 3), [to15(10), to15(20), to15(30), OPAQUE]);
     }
 
     #[test]
