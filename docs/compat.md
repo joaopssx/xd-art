@@ -55,6 +55,9 @@ same settings, which is the one thing the port promises not to do.
   by C's `rand()`, which depends on the C library and, with OpenMP, on thread timing.
   xd-art picks it with its own seeded generator. On the test images the case never
   happens and the results are identical.
+- **k-means seed.** The original seeds palette generation with the current time, so it gives a
+  different palette on every run. xd-art uses a fixed seed: the same image and settings
+  always give the same palette, which recipes depend on.
 - **Default blur.** xd-art's default blur is a true gaussian with the same overall
   strength for the same radius (sigma is `sqrt(r * (r + 1))`). The original's three box
   blur is available as the compatible mode (`box_approx` in the settings).
