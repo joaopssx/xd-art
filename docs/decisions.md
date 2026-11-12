@@ -77,3 +77,18 @@ every crate that uses the engine.
 Found while checking the Linux build: gpui's HTTP client pulls `xattr 0.2.3`, which no
 longer compiles against libc 0.2.190 and later on Linux. The lock file keeps libc at
 0.2.189 until gpui moves past that `xattr` version.
+
+## 2026-11-12: image crate with a short format list
+
+Decoding uses `image` 0.25 with `default-features = false` and only `png`, `jpeg`, `bmp`
+and `tga` (plus `qoi` behind the feature of the same name). The default feature set
+would also pull AVIF, EXR, TIFF, WebP, HDR and rayon into the engine, which the CLI and
+the web build do not need. GIF goes through the `gif` crate directly, because animation
+needs frame level control that `image` hides.
+
+JPEG is input only. A pixel art result saved as JPEG would smear exactly the hard edges
+the program is about.
+
+None of these decoders can decode at a reduced scale, so the large image path decodes
+once and then averages integer blocks. A memory limit (1 GiB by default, passed to
+`image` as `max_alloc`) rejects files whose header asks for more.

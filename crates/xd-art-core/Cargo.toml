@@ -18,7 +18,7 @@ parallel = []
 # Animated GIF import and export.
 gif = []
 # QOI image format.
-qoi = []
+qoi = ["image/qoi"]
 # Recipes and JSON output.
 serde = []
 # Download palettes from Lospec. Off by default: nothing in the engine touches the
@@ -26,6 +26,7 @@ serde = []
 online-palettes = []
 
 [dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "bmp", "tga"] }
 
 [lints]
 workspace = true
