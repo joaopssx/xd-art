@@ -74,3 +74,37 @@ fn converting_into_a_recycled_buffer_does_not_allocate() {
     });
     assert_eq!(n, 0);
 }
+
+#[test]
+fn a_reused_pipeline_allocates_little_per_frame() {
+    use xd_art_core::cancel::Cancel;
+    use xd_art_core::pipeline::{CachePolicy, Pipeline};
+    use xd_art_core::settings::{DitherMode, Settings, Size};
+    // Run on one thread so every allocation lands on this thread's counter.
+    xd_art_core::par::with_threads(1, || {
+        let frames: Vec<Image> = (0..3u8)
+            .map(|i| Image::new(96, 64, [i * 40, 90, 200]).unwrap())
+            .collect();
+        let mut s = Settings::default();
+        s.sample.size = Size::Absolute {
+            width: 48,
+            height: 32,
+            keep_aspect: false,
+        };
+        s.dither.mode = DitherMode::Floyd;
+        let mut p = Pipeline::new(CachePolicy {
+            entries_per_stage: 0,
+            ..CachePolicy::default()
+        });
+        let c = Cancel::new();
+        p.run(&frames[0], 1, &s, &c).unwrap();
+        p.run(&frames[1], 2, &s, &c).unwrap();
+        let n = allocations(|| {
+            p.run(&frames[2], 3, &s, &c).unwrap();
+        });
+        // Measured: 12. One Arc per stage result, the palette, the color matcher and
+        // its cache, the k-means free path. None of them scale with the image; the
+        // pixel buffers all come from the pool.
+        assert!(n <= 16, "{n} allocations");
+    });
+}

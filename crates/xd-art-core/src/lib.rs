@@ -28,6 +28,7 @@
 // Counts here run over a handful of neighbours, not buffers worth a dependency.
 #![allow(clippy::naive_bytecount)]
 
+#[cfg(feature = "gif")]
 pub mod anim;
 pub mod buffer;
 pub mod cancel;

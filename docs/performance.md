@@ -163,3 +163,11 @@ trails the one above by twice the kernel's reach, which keeps the order in which
 pixel receives its error the same as in the one thread loop. The result is identical
 (a test compares 1, 3 and 8 threads for every mode on a 320x240 image), and the speedup
 is lower than for the ordered modes because rows wait on each other.
+
+## Allocations
+
+`crates/xd-art-core/tests/alloc.rs` counts heap allocations with a replacement global
+allocator. A pipeline that already converted one frame converts the next one of the same
+size (96x64 to 48x32, Floyd-Steinberg) with 12 allocations, none of them for pixels:
+one `Arc` per stage result, the palette, the color matcher and its cache. GIF
+conversion keeps one pipeline per thread for exactly this reason.
