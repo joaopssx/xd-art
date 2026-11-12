@@ -21,6 +21,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::buffer::{Image, Indexed, Work};
+use crate::cancel::Cancel;
+use crate::pool::Pool;
 use crate::settings::{Fingerprint, Fnv, PaletteSource, Settings};
 use crate::{Error, Result};
 
@@ -232,9 +234,23 @@ pub struct Report {
 pub struct Inputs<'a> {
     source: &'a Image,
     outs: [Option<&'a Data>; 7],
+    pool: &'a Pool,
+    cancel: &'a Cancel,
 }
 
 impl Inputs<'_> {
+    /// Buffers to build the result in.
+    #[must_use]
+    pub fn pool(&self) -> &Pool {
+        self.pool
+    }
+
+    /// The token to check between rows.
+    #[must_use]
+    pub fn cancel(&self) -> &Cancel {
+        self.cancel
+    }
+
     /// The source image.
     #[must_use]
     pub fn source(&self) -> &Image {
@@ -291,6 +307,7 @@ pub struct Pipeline {
     current: [Option<(u64, Arc<Data>)>; 7],
     older: [Vec<Entry>; 7],
     tick: u64,
+    pool: Pool,
 }
 
 impl Default for Pipeline {
@@ -308,6 +325,7 @@ impl Pipeline {
             current: Default::default(),
             older: Default::default(),
             tick: 0,
+            pool: Pool::new(),
         }
     }
 
@@ -335,6 +353,7 @@ impl Pipeline {
         source: &Image,
         source_id: u64,
         s: &Settings,
+        cancel: &Cancel,
         mut exec: F,
     ) -> Result<Report>
     where
@@ -351,6 +370,7 @@ impl Pipeline {
             }
             self.tick += 1;
             let tick = self.tick;
+            cancel.check()?;
             let data = if let Some(pos) = self.older[i].iter().position(|e| e.key == key) {
                 report.restored.insert(stage);
                 self.older[i].swap_remove(pos).data
@@ -358,6 +378,8 @@ impl Pipeline {
                 let inputs = Inputs {
                     source,
                     outs: std::array::from_fn(|j| self.current[j].as_ref().map(|c| &*c.1)),
+                    pool: &self.pool,
+                    cancel,
                 };
                 let start = Instant::now();
                 let data = exec(stage, &inputs, s)?;
@@ -375,6 +397,7 @@ impl Pipeline {
     fn keep(&mut self, i: usize, key: u64, data: Arc<Data>, used: u64) {
         let p = self.policy;
         if p.entries_per_stage == 0 || data.heap_size() > p.max_entry_bytes {
+            self.recycle(data);
             return;
         }
         let list = &mut self.older[i];
@@ -386,7 +409,8 @@ impl Pipeline {
                 .min_by_key(|(_, e)| e.used)
                 .map(|(j, _)| j);
             if let Some(j) = oldest {
-                list.swap_remove(j);
+                let e = list.swap_remove(j);
+                self.recycle(e.data);
             }
         }
         while self.older_bytes() > p.max_bytes {
@@ -398,11 +422,27 @@ impl Pipeline {
                 .min();
             match oldest {
                 Some((_, s, j)) => {
-                    self.older[s].swap_remove(j);
+                    let e = self.older[s].swap_remove(j);
+                    self.recycle(e.data);
                 }
                 None => break,
             }
         }
+    }
+
+    /// Hands the buffers of a result nobody else holds back to the pool.
+    fn recycle(&self, data: Arc<Data>) {
+        match Arc::try_unwrap(data) {
+            Ok(Data::Work(w)) => self.pool.recycle(w),
+            Ok(Data::Indexed(i)) => self.pool.recycle_indexed(i),
+            _ => {}
+        }
+    }
+
+    /// The buffer pool shared by the stages.
+    #[must_use]
+    pub fn pool(&self) -> &Pool {
+        &self.pool
     }
 
     /// Bytes held by older results.
@@ -417,8 +457,9 @@ impl Pipeline {
 
     /// Drops every older result. Current results stay.
     pub fn clear_older(&mut self) {
-        for l in &mut self.older {
-            l.clear();
+        let all: Vec<Entry> = self.older.iter_mut().flat_map(std::mem::take).collect();
+        for e in all {
+            self.recycle(e.data);
         }
     }
 
@@ -461,12 +502,15 @@ mod tests {
     use super::*;
     use crate::settings::{DitherMode, Quantizer};
 
-    fn fake(stage: Stage, inp: &Inputs<'_>, _: &Settings) -> Result<Data> {
+    fn fake(stage: Stage, inp: &Inputs<'_>, s: &Settings) -> Result<Data> {
         Ok(match stage {
             Stage::Blur => Data::Work(inp.source().to_work()),
-            Stage::Sample => Data::Work(inp.work(Stage::Blur)?.clone()),
-            Stage::Adjust => Data::Work(inp.work(Stage::Sample)?.clone()),
-            Stage::Palette => Data::Palette(vec![[1, 2, 3]]),
+            Stage::Sample => Data::Work(inp.pool().copy(inp.work(Stage::Blur)?)),
+            Stage::Adjust => Data::Work(inp.pool().copy(inp.work(Stage::Sample)?)),
+            Stage::Palette => Data::Palette(match &s.colors.palette {
+                PaletteSource::Colors(c) => c.clone(),
+                _ => vec![[1, 2, 3]],
+            }),
             Stage::Map => {
                 let w = inp.work(Stage::Adjust)?;
                 inp.palette()?;
@@ -483,7 +527,7 @@ mod tests {
 
     fn run(p: &mut Pipeline, img: &Image, id: u64, s: &Settings) -> Report {
         let dirty = p.dirty(id, s);
-        let r = p.run_with(img, id, s, fake).unwrap();
+        let r = p.run_with(img, id, s, &Cancel::new(), fake).unwrap();
         let mut both = r.ran;
         for st in r.restored.iter() {
             both.insert(st);
@@ -613,7 +657,7 @@ mod tests {
         let img = Image::new(2, 2, [0; 3]).unwrap();
         let mut p = Pipeline::default();
         let s = Settings::default();
-        let err = p.run_with(&img, 1, &s, |st, i, s| {
+        let err = p.run_with(&img, 1, &s, &Cancel::new(), |st, i, s| {
             if st == Stage::Map {
                 Err(Error::Cancelled)
             } else {
@@ -628,7 +672,70 @@ mod tests {
         );
         let mut bad = s.clone();
         bad.output.scale = 0;
-        assert!(p.run_with(&img, 1, &bad, fake).is_err());
+        assert!(p.run_with(&img, 1, &bad, &Cancel::new(), fake).is_err());
+    }
+
+    #[test]
+    fn cancelled_run_keeps_the_previous_result() {
+        let img = Image::new(4, 4, [9, 9, 9]).unwrap();
+        let mut p = Pipeline::default();
+        let mut s = Settings::default();
+        p.run_with(&img, 1, &s, &Cancel::new(), fake).unwrap();
+        let before = p.output().unwrap().clone();
+        s.colors.palette = PaletteSource::Colors(vec![[7, 7, 7]]);
+        let cancel = Cancel::new();
+        let r = p.run_with(&img, 1, &s, &cancel, |st, i, s| {
+            if st == Stage::Map {
+                cancel.cancel();
+                i.cancel().check()?;
+            }
+            fake(st, i, s)
+        });
+        assert!(matches!(r, Err(Error::Cancelled)));
+        assert_eq!(p.output(), Some(&before));
+        let dirty = p.dirty(1, &s);
+        assert!(dirty.contains(Stage::Map) && !dirty.contains(Stage::Palette));
+    }
+
+    #[test]
+    fn rapid_changes_from_another_thread() {
+        // A worker keeps restarting with new settings while the old run is cancelled, as
+        // the interface does while a slider moves. Every finished run must match its own
+        // settings, never an earlier one.
+        let img = Image::new(8, 8, [0; 3]).unwrap();
+        let mut p = Pipeline::default();
+        let mut last = None;
+        for step in 0..50u8 {
+            let mut s = Settings::default();
+            s.colors.palette = PaletteSource::Colors(vec![[step, 0, 0]]);
+            let cancel = Cancel::new();
+            if let Some(prev) = last.replace(cancel.clone()) {
+                Cancel::cancel(&prev);
+            }
+            if step % 3 == 0 {
+                cancel.cancel();
+            }
+            match p.run_with(&img, 1, &s, &cancel, fake) {
+                Ok(_) => assert_eq!(p.output().unwrap().get(0, 0), Some([step, 0, 0, 255])),
+                Err(Error::Cancelled) => {}
+                Err(e) => panic!("{e}"),
+            }
+        }
+    }
+
+    #[test]
+    fn evicted_results_feed_the_pool() {
+        let img = Image::new(8, 8, [0; 3]).unwrap();
+        let mut p = Pipeline::new(CachePolicy {
+            entries_per_stage: 0,
+            ..CachePolicy::default()
+        });
+        let mut s = Settings::default();
+        p.run_with(&img, 1, &s, &Cancel::new(), fake).unwrap();
+        assert_eq!(p.pool().held(), 0);
+        s.sample.offset_x = 0.5;
+        p.run_with(&img, 1, &s, &Cancel::new(), fake).unwrap();
+        assert!(p.pool().held() >= 2);
     }
 
     #[test]

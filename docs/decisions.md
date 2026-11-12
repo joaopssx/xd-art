@@ -119,3 +119,14 @@ The pipeline caches the current result of every stage plus up to three older one
 stage (256 MB total, nothing above 64 MB per result). The older ones exist for the
 common "flip between two options" comparison. Large intermediates, mostly a blurred full
 size photo, are not kept because recomputing them is cheaper than holding several.
+
+## 2026-11-12: buffer pool and cancellation
+
+Stages take their output buffers from a pool owned by the pipeline, and results the
+pipeline drops go back to it. The pool keeps at most eight buffers of each kind. The
+allocation test in `crates/xd-art-core/tests/alloc.rs` replaces the global allocator
+with a counting one (the only `unsafe` outside the engine proper, and test only).
+
+Cancellation is a shared atomic flag that stages check between rows. A stage result is
+stored only after the stage returns, so a cancelled run cannot leave a half written
+image behind; the previous result stays until a run completes.
