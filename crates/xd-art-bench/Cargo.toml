@@ -29,5 +29,9 @@ harness = false
 name = "palette"
 harness = false
 
+[[bench]]
+name = "dither"
+harness = false
+
 [lints]
 workspace = true

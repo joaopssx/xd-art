@@ -7,6 +7,10 @@
 //! Error diffusion follows the original's arithmetic too: errors are measured in 8-bit
 //! steps, spread in `f32`, and added back to the 15-bit working image with truncation.
 //! Transparent pixels neither receive nor pass on error.
+//!
+//! Ordered modes, picoCAD and plain closest color run row by row in parallel. Error
+//! diffusion is sequential by nature; it runs as a wavefront over threads, with a lag
+//! between rows that makes the result identical to the one thread loop.
 
 use crate::buffer::{Indexed, Px, Work, to8};
 use crate::cancel::Cancel;
@@ -74,7 +78,7 @@ pub fn map(
         DitherMode::MedianCut => median_assign(img, &m, *d, &mut out),
         mode if mode.is_diffusion() => {
             let mut work = pool.copy(img);
-            let r = diffuse_serial(&mut work, &m, mode, d.alpha_threshold, &mut out, cancel);
+            let r = diffuse(&mut work, &m, mode, d.alpha_threshold, &mut out, cancel);
             pool.recycle(work);
             r?;
         }
@@ -315,6 +319,145 @@ fn diffuse_serial(
         }
     }
     Ok(())
+}
+
+/// Below this many pixels the wavefront is not worth starting threads for.
+#[cfg(feature = "parallel")]
+const WAVE_FROM: usize = 64 * 1024;
+
+#[cfg(feature = "parallel")]
+#[inline]
+fn pack(p: Px) -> u64 {
+    u64::from(p[0]) | u64::from(p[1]) << 16 | u64::from(p[2]) << 32 | u64::from(p[3]) << 48
+}
+
+#[cfg(feature = "parallel")]
+#[inline]
+fn unpack(v: u64) -> Px {
+    [
+        v as u16,
+        (v >> 16) as u16,
+        (v >> 32) as u16,
+        (v >> 48) as u16,
+    ]
+}
+
+/// Error diffusion on several threads, with exactly the serial result.
+///
+/// Rows are dealt round robin to the threads, and row `y` only handles pixel `x` once
+/// row `y - 1` has finished pixel `x + lag`, where `lag` is twice the kernel's reach
+/// (4 for every kernel here). With that lag:
+///
+/// - every contribution a pixel will ever get from the rows above has arrived before
+///   the pixel is read;
+/// - contributions arrive in the same order as in the serial loop (all of row `y - 2`
+///   before any of row `y - 1`), and since each one is rounded on its own, the order is
+///   what makes the result identical, not just close;
+/// - no two threads ever touch the same pixel at the same time.
+///
+/// Pixels are `AtomicU64` with relaxed access; the per row progress counters carry the
+/// ordering (release after a pixel is done, acquire before reading the row below it).
+#[cfg(feature = "parallel")]
+fn diffuse_wave(
+    work: &Work,
+    m: &Matcher,
+    mode: DitherMode,
+    threshold: u8,
+    out: &mut Indexed,
+    cancel: &Cancel,
+    threads: usize,
+) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+    let taps = kernel(mode).unwrap_or(&FLOYD);
+    let reach = taps.iter().map(|t| t.dx.unsigned_abs()).max().unwrap_or(1) as usize;
+    let lag = 2 * reach;
+    let (w, h) = (work.width as usize, work.height as usize);
+    let px: Vec<AtomicU64> = work.px.iter().map(|&p| AtomicU64::new(pack(p))).collect();
+    let done: Vec<AtomicUsize> = (0..h).map(|_| AtomicUsize::new(0)).collect();
+    let stop = AtomicBool::new(false);
+    let rows: Vec<Vec<(usize, Vec<u8>)>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..threads)
+            .map(|t| {
+                let (px, done, stop) = (&px, &done, &stop);
+                s.spawn(move || {
+                    let mut cache = Cache::default();
+                    let mut mine = Vec::new();
+                    for y in (t..h).step_by(threads) {
+                        let mut line = vec![0u8; w];
+                        for x in 0..w {
+                            if y > 0 {
+                                let need = (x + lag + 1).min(w);
+                                let mut spins = 0u32;
+                                while done[y - 1].load(Ordering::Acquire) < need {
+                                    if stop.load(Ordering::Relaxed) {
+                                        return mine;
+                                    }
+                                    spins += 1;
+                                    if spins > 64 {
+                                        std::thread::yield_now();
+                                    } else {
+                                        std::hint::spin_loop();
+                                    }
+                                }
+                            }
+                            let p = unpack(px[y * w + x].load(Ordering::Relaxed));
+                            if !is_clear(p, threshold) {
+                                let c = cache.closest(m, rgb8(p));
+                                line[x] = c;
+                                let e = pixel_error(mode, p, m.colors()[c as usize]);
+                                for tp in taps {
+                                    let tx = x as isize + isize::from(tp.dx);
+                                    let ty = y + tp.dy as usize;
+                                    if tx >= 0 && (tx as usize) < w && ty < h {
+                                        let slot = &px[ty * w + tx as usize];
+                                        let mut q = unpack(slot.load(Ordering::Relaxed));
+                                        add_error(&mut q, e.map(|v| share(mode, v, *tp)));
+                                        slot.store(pack(q), Ordering::Relaxed);
+                                    }
+                                }
+                            }
+                            done[y].store(x + 1, Ordering::Release);
+                        }
+                        mine.push((y, line));
+                        if cancel.is_cancelled() {
+                            stop.store(true, Ordering::Relaxed);
+                            return mine;
+                        }
+                    }
+                    mine
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|j| j.join().unwrap_or_default())
+            .collect()
+    });
+    cancel.check()?;
+    for (y, line) in rows.into_iter().flatten() {
+        out.index[y * w..(y + 1) * w].copy_from_slice(&line);
+    }
+    Ok(())
+}
+
+/// Picks the serial loop or the wavefront.
+fn diffuse(
+    work: &mut Work,
+    m: &Matcher,
+    mode: DitherMode,
+    threshold: u8,
+    out: &mut Indexed,
+    cancel: &Cancel,
+) -> Result<()> {
+    #[cfg(feature = "parallel")]
+    {
+        let threads = rayon::current_num_threads().min(work.height as usize);
+        if threads > 1 && work.px.len() >= WAVE_FROM {
+            return diffuse_wave(work, m, mode, threshold, out, cancel, threads);
+        }
+    }
+    diffuse_serial(work, m, mode, threshold, out, cancel)
 }
 
 /// The picoCAD look: the two closest colors, and a checkerboard between them when the
@@ -661,6 +804,67 @@ mod tests {
         // starts with it.
         assert_eq!(&out.index[..4], &[1, 0, 1, 0]);
         assert_eq!(&out.index[4..8], &[0, 1, 0, 1]);
+    }
+
+    fn noise(w: u32, h: u32) -> Work {
+        let mut img = Work::new(w, h, [0; 4]).unwrap();
+        let mut s = 5u32;
+        for (i, p) in img.px.iter_mut().enumerate() {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            let a = if i % 97 == 0 { 0 } else { 0x7f80 };
+            *p = [
+                (s & 0x7fff) as u16,
+                (s >> 9 & 0x7fff) as u16,
+                (s >> 17 & 0x7fff) as u16,
+                a,
+            ];
+        }
+        img
+    }
+
+    #[test]
+    fn one_thread_and_many_agree_for_every_mode() {
+        // 320x240 is above WAVE_FROM, so error diffusion takes the wavefront path.
+        let img = noise(320, 240);
+        let pal: Vec<[u8; 3]> = crate::palette::builtin("pico-8").unwrap().colors().to_vec();
+        for mode in DitherMode::ALL {
+            let d = Dither {
+                mode,
+                amount: 0.5,
+                ..Dither::default()
+            };
+            let run = |t| {
+                par::with_threads(t, || {
+                    map(
+                        &img,
+                        &pal,
+                        Metric::Redmean,
+                        &d,
+                        &Pool::new(),
+                        &Cancel::new(),
+                    )
+                    .unwrap()
+                })
+            };
+            assert_eq!(run(1), run(8), "{mode:?}");
+            assert_eq!(run(3), run(8), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn cancelled_diffusion_stops() {
+        let img = noise(400, 300);
+        let pal = [[0u8; 3], [255; 3]];
+        let d = Dither {
+            mode: DitherMode::Stucki,
+            ..Dither::default()
+        };
+        let c = Cancel::new();
+        c.cancel();
+        let r = par::with_threads(4, || map(&img, &pal, Metric::Rgb, &d, &Pool::new(), &c));
+        assert!(matches!(r, Err(Error::Cancelled)));
     }
 
     #[test]

@@ -142,3 +142,24 @@ only exists for RGB, weighted, redmean and CIE76, the metrics with a per channel
 bound; CIE94 and CIEDE2000 always search linearly. The tree gives exactly the linear
 search's answer, ties included, which a test checks on 5000 colors for several palette
 sizes.
+
+## Dithering
+
+```sh
+cargo bench -p xd-art-bench --bench dither -- --warm-up-time 1 --measurement-time 3
+```
+
+640x480 synthetic image mapped to PICO-8 with redmean.
+
+| mode | 1 thread | 32 threads |
+|---|---|---|
+| none (closest color) | 35.2 ms | 2.38 ms |
+| bayer 4x4 | 36.4 ms | 2.44 ms |
+| Floyd-Steinberg | 45.0 ms | 5.87 ms |
+| Stucki | 54.3 ms | 6.78 ms |
+
+Ordered modes split rows across threads. Error diffusion runs as a wavefront: each row
+trails the one above by twice the kernel's reach, which keeps the order in which every
+pixel receives its error the same as in the one thread loop. The result is identical
+(a test compares 1, 3 and 8 threads for every mode on a 320x240 image), and the speedup
+is lower than for the ordered modes because rows wait on each other.

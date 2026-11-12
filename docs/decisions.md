@@ -166,3 +166,14 @@ test compares one thread against eight for every sampling mode.
 I did not add intrinsics. Writing the channel math on `[f32; 4]` gets vector instructions
 from the compiler with no `unsafe`, and keeps the exact `f32` rounding of the scalar code.
 So there is no `unsafe` module to run under Miri yet.
+
+## 2026-11-12: error diffusion wavefront on plain threads
+
+The wavefront workers wait for the row above them with a short spin and then
+`yield_now`. That is fine on threads of their own but would block rayon's workers,
+which other stages expect to be free, so the wavefront uses `std::thread::scope` with
+as many threads as rayon has. Pixels are `AtomicU64` with relaxed loads and stores and
+the per row progress counters use release and acquire, which is enough because the lag
+guarantees no two threads touch the same pixel at once. No `unsafe` needed.
+
+Images below 65,536 pixels skip the wavefront; starting threads costs more there.
