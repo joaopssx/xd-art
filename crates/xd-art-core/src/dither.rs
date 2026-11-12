@@ -18,7 +18,7 @@ use crate::color::{Cache, Matcher};
 use crate::par;
 use crate::pool::Pool;
 use crate::sampling::is_clear;
-use crate::settings::{Dither, DitherMode, Metric};
+use crate::settings::{Dither, DitherMode, Mask, Metric};
 use crate::tables;
 use crate::{Error, Result};
 
@@ -50,7 +50,9 @@ fn nudge(amount: f32, t: f32) -> i64 {
 }
 
 /// Maps `img` to `palette`. Transparent pixels (by the alpha threshold) get index 0 and
-/// are marked clear.
+/// are marked clear. With a `mask`, dithering strength follows it per pixel: black
+/// means no dithering there (closest color only), white means full strength. Without a
+/// mask the result is exactly the original's.
 ///
 /// # Errors
 ///
@@ -61,6 +63,7 @@ pub fn map(
     palette: &[[u8; 3]],
     metric: Metric,
     d: &Dither,
+    mask: Option<&Mask>,
     pool: &Pool,
     cancel: &Cancel,
 ) -> Result<Indexed> {
@@ -74,16 +77,24 @@ pub fn map(
     let mut out = pool.indexed(img.width, img.height);
     match d.mode {
         DitherMode::None => closest(img, &m, d.alpha_threshold, &mut out, cancel)?,
-        DitherMode::Picocad => picocad(img, &m, d.alpha_threshold, &mut out, cancel)?,
+        DitherMode::Picocad => picocad(img, &m, d.alpha_threshold, mask, &mut out, cancel)?,
         DitherMode::MedianCut => median_assign(img, &m, *d, &mut out),
         mode if mode.is_diffusion() => {
             let mut work = pool.copy(img);
-            let r = diffuse(&mut work, &m, mode, d.alpha_threshold, &mut out, cancel);
+            let r = diffuse(
+                &mut work,
+                &m,
+                mode,
+                d.alpha_threshold,
+                mask,
+                &mut out,
+                cancel,
+            );
             pool.recycle(work);
             r?;
         }
         mode => match threshold_map(mode) {
-            Some((n, map)) => ordered(img, &m, *d, n, map, &mut out, cancel)?,
+            Some((n, map)) => ordered(img, &m, *d, n, map, mask, &mut out, cancel)?,
             None => return Err(Error::Unsupported(format!("dither mode {}", mode.name()))),
         },
     }
@@ -126,12 +137,15 @@ fn closest(
     )
 }
 
+// Private, called from one place; a struct for the arguments would only rename them.
+#[allow(clippy::too_many_arguments)]
 fn ordered(
     img: &Work,
     m: &Matcher,
     d: Dither,
     n: usize,
     map: &[f32],
+    mask: Option<&Mask>,
     out: &mut Indexed,
     cancel: &Cancel,
 ) -> Result<()> {
@@ -151,7 +165,11 @@ fn ordered(
                     *o = 0;
                     continue;
                 }
-                let k = line[x % n];
+                let mut k = line[x % n];
+                if let Some(mk) = mask {
+                    let v = mk.at(x as u32, y as u32, img.width, img.height);
+                    k = (k as f32 * f32::from(v) / 255.0) as i64;
+                }
                 let q = [0, 1, 2].map(|c| (i64::from(p[c]) + k).clamp(0, 0x7fff) as u16);
                 *o = cache.closest(m, [to8(q[0]), to8(q[1]), to8(q[2])]);
             }
@@ -269,6 +287,19 @@ fn add_error(p: &mut Px, e: [f32; 3]) {
     }
 }
 
+/// The error scaled by the mask at `(x, y)`. Without a mask it is left untouched, so
+/// the arithmetic stays the original's.
+#[inline]
+fn scaled(e: [f32; 3], mask: Option<&Mask>, x: u32, y: u32, w: u32, h: u32) -> [f32; 3] {
+    match mask {
+        Some(m) => {
+            let k = f32::from(m.at(x, y, w, h)) / 255.0;
+            e.map(|v| v * k)
+        }
+        None => e,
+    }
+}
+
 /// Error left after mapping one pixel to palette color `pc`.
 #[inline]
 fn pixel_error(mode: DitherMode, p: Px, pc: [u8; 3]) -> [f32; 3] {
@@ -291,6 +322,7 @@ fn diffuse_serial(
     m: &Matcher,
     mode: DitherMode,
     threshold: u8,
+    mask: Option<&Mask>,
     out: &mut Indexed,
     cancel: &Cancel,
 ) -> Result<()> {
@@ -308,7 +340,14 @@ fn diffuse_serial(
             }
             let c = cache.closest(m, rgb8(p));
             out.index[i] = c;
-            let e = pixel_error(mode, p, m.colors()[c as usize]);
+            let e = scaled(
+                pixel_error(mode, p, m.colors()[c as usize]),
+                mask,
+                x as u32,
+                y as u32,
+                work.width,
+                work.height,
+            );
             for t in taps {
                 let (tx, ty) = (x + i32::from(t.dx), y + i32::from(t.dy));
                 if tx >= 0 && tx < w && ty < h {
@@ -358,11 +397,13 @@ fn unpack(v: u64) -> Px {
 /// Pixels are `AtomicU64` with relaxed access; the per row progress counters carry the
 /// ordering (release after a pixel is done, acquire before reading the row below it).
 #[cfg(feature = "parallel")]
+#[allow(clippy::too_many_arguments)]
 fn diffuse_wave(
     work: &Work,
     m: &Matcher,
     mode: DitherMode,
     threshold: u8,
+    mask: Option<&Mask>,
     out: &mut Indexed,
     cancel: &Cancel,
     threads: usize,
@@ -405,7 +446,14 @@ fn diffuse_wave(
                             if !is_clear(p, threshold) {
                                 let c = cache.closest(m, rgb8(p));
                                 line[x] = c;
-                                let e = pixel_error(mode, p, m.colors()[c as usize]);
+                                let e = scaled(
+                                    pixel_error(mode, p, m.colors()[c as usize]),
+                                    mask,
+                                    x as u32,
+                                    y as u32,
+                                    w as u32,
+                                    h as u32,
+                                );
                                 for tp in taps {
                                     let tx = x as isize + isize::from(tp.dx);
                                     let ty = y + tp.dy as usize;
@@ -447,6 +495,7 @@ fn diffuse(
     m: &Matcher,
     mode: DitherMode,
     threshold: u8,
+    mask: Option<&Mask>,
     out: &mut Indexed,
     cancel: &Cancel,
 ) -> Result<()> {
@@ -454,10 +503,10 @@ fn diffuse(
     {
         let threads = rayon::current_num_threads().min(work.height as usize);
         if threads > 1 && work.px.len() >= WAVE_FROM {
-            return diffuse_wave(work, m, mode, threshold, out, cancel, threads);
+            return diffuse_wave(work, m, mode, threshold, mask, out, cancel, threads);
         }
     }
-    diffuse_serial(work, m, mode, threshold, out, cancel)
+    diffuse_serial(work, m, mode, threshold, mask, out, cancel)
 }
 
 /// The picoCAD look: the two closest colors, and a checkerboard between them when the
@@ -466,6 +515,7 @@ fn picocad(
     img: &Work,
     m: &Matcher,
     threshold: u8,
+    mask: Option<&Mask>,
     out: &mut Indexed,
     cancel: &Cancel,
 ) -> Result<()> {
@@ -483,6 +533,11 @@ fn picocad(
                 }
                 let (i0, i1, t) = m.closest_two(rgb8(*p));
                 let checker_odd = (x ^ y) & 1 == 1;
+                let t = match mask {
+                    // A dark mask pulls t toward the ends, where no checker is drawn.
+                    Some(mk) if mk.at(x as u32, y as u32, img.width, img.height) < 128 => t.round(),
+                    _ => t,
+                };
                 *o = if t >= 2.0 / 3.0 || (t > 1.0 / 3.0 && checker_odd) {
                     i1
                 } else {
@@ -699,6 +754,7 @@ mod tests {
             &[[0; 3], [255; 3]],
             Metric::Rgb,
             &d,
+            None,
             &Pool::new(),
             &Cancel::new(),
         )
@@ -720,6 +776,7 @@ mod tests {
             &[[0; 3], [255; 3]],
             Metric::Rgb,
             &d,
+            None,
             &Pool::new(),
             &Cancel::new(),
         )
@@ -780,7 +837,16 @@ mod tests {
             ..Dither::default()
         };
         let pal = [[255; 3], [0; 3], [128; 3]];
-        let out = map(&img, &pal, Metric::Rgb, &d, &Pool::new(), &Cancel::new()).unwrap();
+        let out = map(
+            &img,
+            &pal,
+            Metric::Rgb,
+            &d,
+            None,
+            &Pool::new(),
+            &Cancel::new(),
+        )
+        .unwrap();
         assert_eq!(out.index, [1, 1, 0, 0]);
     }
 
@@ -796,6 +862,7 @@ mod tests {
             &[[0; 3], [255; 3]],
             Metric::Rgb,
             &d,
+            None,
             &Pool::new(),
             &Cancel::new(),
         )
@@ -842,6 +909,7 @@ mod tests {
                         &pal,
                         Metric::Redmean,
                         &d,
+                        None,
                         &Pool::new(),
                         &Cancel::new(),
                     )
@@ -863,14 +931,86 @@ mod tests {
         };
         let c = Cancel::new();
         c.cancel();
-        let r = par::with_threads(4, || map(&img, &pal, Metric::Rgb, &d, &Pool::new(), &c));
+        let r = par::with_threads(4, || {
+            map(&img, &pal, Metric::Rgb, &d, None, &Pool::new(), &c)
+        });
         assert!(matches!(r, Err(Error::Cancelled)));
+    }
+
+    #[test]
+    fn black_mask_turns_dithering_off() {
+        let img = noise(64, 48);
+        let pal: Vec<[u8; 3]> = crate::palette::builtin("pico-8").unwrap().colors().to_vec();
+        let black = Mask::new(1, 1, vec![0]).unwrap();
+        let white = Mask::new(1, 1, vec![255]).unwrap();
+        let plain = map(
+            &img,
+            &pal,
+            Metric::Rgb,
+            &Dither::default(),
+            None,
+            &Pool::new(),
+            &Cancel::new(),
+        )
+        .unwrap();
+        for mode in [DitherMode::Bayer4, DitherMode::Floyd, DitherMode::Picocad] {
+            let d = Dither {
+                mode,
+                amount: 1.0,
+                ..Dither::default()
+            };
+            let off = map(
+                &img,
+                &pal,
+                Metric::Rgb,
+                &d,
+                Some(&black),
+                &Pool::new(),
+                &Cancel::new(),
+            )
+            .unwrap();
+            if mode != DitherMode::Picocad {
+                assert_eq!(off, plain, "{mode:?}");
+            }
+            let full = map(
+                &img,
+                &pal,
+                Metric::Rgb,
+                &d,
+                Some(&white),
+                &Pool::new(),
+                &Cancel::new(),
+            )
+            .unwrap();
+            let none = map(
+                &img,
+                &pal,
+                Metric::Rgb,
+                &d,
+                None,
+                &Pool::new(),
+                &Cancel::new(),
+            )
+            .unwrap();
+            assert_eq!(full, none, "{mode:?}");
+        }
     }
 
     #[test]
     fn bad_palettes_are_rejected() {
         let img = Work::new(1, 1, [0; 4]).unwrap();
         let d = Dither::default();
-        assert!(map(&img, &[], Metric::Rgb, &d, &Pool::new(), &Cancel::new()).is_err());
+        assert!(
+            map(
+                &img,
+                &[],
+                Metric::Rgb,
+                &d,
+                None,
+                &Pool::new(),
+                &Cancel::new()
+            )
+            .is_err()
+        );
     }
 }

@@ -32,9 +32,16 @@ fn bench(c: &mut Criterion) {
             g.bench_function(id, |b| {
                 par::with_threads(threads, || {
                     b.iter(|| {
-                        let out =
-                            dither::map(&img, pal.colors(), Metric::Redmean, &d, &pool, &cancel)
-                                .expect("not cancelled");
+                        let out = dither::map(
+                            &img,
+                            pal.colors(),
+                            Metric::Redmean,
+                            &d,
+                            None,
+                            &pool,
+                            &cancel,
+                        )
+                        .expect("not cancelled");
                         pool.recycle_indexed(out);
                     });
                 });

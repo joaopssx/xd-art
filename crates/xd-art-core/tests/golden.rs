@@ -199,6 +199,7 @@ fn dithered(
         &common::PICO8,
         metric,
         &d,
+        None,
         &Pool::new(),
         &Cancel::new(),
     )

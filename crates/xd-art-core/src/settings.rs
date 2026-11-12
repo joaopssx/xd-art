@@ -22,17 +22,21 @@ pub enum SampleMode {
     Box,
     /// Most common color of the area, found with a small k-means.
     Cluster,
+    /// Average of the area weighted by similarity to its center pixel, so edges stay
+    /// sharp. Strength in [`Sample::edge_strength`].
+    Edge,
 }
 
 impl SampleMode {
     /// Every mode, in menu order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Nearest,
         Self::Bilinear,
         Self::Bicubic,
         Self::Lanczos,
         Self::Box,
         Self::Cluster,
+        Self::Edge,
     ];
 
     /// Short lowercase name used in the CLI, recipes and Lua.
@@ -45,6 +49,7 @@ impl SampleMode {
             Self::Lanczos => "lanczos",
             Self::Box => "box",
             Self::Cluster => "cluster",
+            Self::Edge => "edge",
         }
     }
 
@@ -139,6 +144,8 @@ pub struct Sample {
     pub offset_x: f32,
     /// Vertical sample offset, in output pixels, `-1..=1`.
     pub offset_y: f32,
+    /// How strongly [`SampleMode::Edge`] keeps edges, `0..=1`. 0 is a plain box average.
+    pub edge_strength: f32,
 }
 
 impl Default for Sample {
@@ -148,6 +155,7 @@ impl Default for Sample {
             size: Size::default(),
             offset_x: 0.0,
             offset_y: 0.0,
+            edge_strength: 0.6,
         }
     }
 }
@@ -475,6 +483,90 @@ pub struct Settings {
     pub post: Post,
     /// Output.
     pub output: Output,
+    /// Grayscale map of dithering strength over the image. White is full strength.
+    pub mask: Option<Mask>,
+}
+
+/// A grayscale map over the image, stretched to whatever size it is applied to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mask {
+    width: u32,
+    height: u32,
+    data: std::sync::Arc<[u8]>,
+    id: u64,
+}
+
+impl Mask {
+    /// Wraps one byte per pixel.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the buffer does not match the size.
+    pub fn new(width: u32, height: u32, data: Vec<u8>) -> Result<Self> {
+        if width == 0 || height == 0 || data.len() != width as usize * height as usize {
+            return Err(Error::Invalid {
+                name: "mask",
+                reason: "size does not match the data".into(),
+            });
+        }
+        let id = Fnv::default()
+            .u64(u64::from(width))
+            .u64(u64::from(height))
+            .bytes(&data)
+            .finish();
+        Ok(Self {
+            width,
+            height,
+            data: data.into(),
+            id,
+        })
+    }
+
+    /// The luminance of an image (Rec. 601 weights), transparent pixels as black.
+    ///
+    /// # Errors
+    ///
+    /// Never fails for a valid image; the `Result` is for symmetry with [`Mask::new`].
+    pub fn from_image(img: &crate::buffer::Image) -> Result<Self> {
+        let mut data = Vec::with_capacity(img.width() as usize * img.height() as usize);
+        for y in 0..img.height() {
+            for x in 0..img.width() {
+                let p = img.get(x, y).unwrap_or_default();
+                let l =
+                    (299 * u32::from(p[0]) + 587 * u32::from(p[1]) + 114 * u32::from(p[2])) / 1000;
+                data.push((l * u32::from(p[3]) / 255) as u8);
+            }
+        }
+        Self::new(img.width(), img.height(), data)
+    }
+
+    /// Mask value for pixel `(x, y)` of a `w` x `h` image, by nearest sampling.
+    #[inline]
+    #[must_use]
+    pub fn at(&self, x: u32, y: u32, w: u32, h: u32) -> u8 {
+        let mx = (u64::from(x) * u64::from(self.width) / u64::from(w.max(1))) as usize;
+        let my = (u64::from(y) * u64::from(self.height) / u64::from(h.max(1))) as usize;
+        self.data[my.min(self.height as usize - 1) * self.width as usize
+            + mx.min(self.width as usize - 1)]
+    }
+
+    /// Size of the mask.
+    #[must_use]
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// The raw values.
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// A hash of the contents, part of the map stage's key.
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 fn check(ok: bool, name: &'static str, reason: &str) -> Result<()> {
@@ -685,6 +777,9 @@ impl Fingerprint for Blur {
 
 impl Fingerprint for Sample {
     fn feed(&self, h: &mut Fnv) {
+        if self.mode == SampleMode::Edge {
+            h.f32(self.edge_strength);
+        }
         h.str(self.mode.name())
             .f32(self.offset_x)
             .f32(self.offset_y);

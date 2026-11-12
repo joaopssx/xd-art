@@ -58,6 +58,7 @@ struct Grid {
     off_x: f32,
     off_y: f32,
     rows: u32,
+    edge: f32,
 }
 
 impl Grid {
@@ -68,6 +69,7 @@ impl Grid {
             off_x,
             off_y,
             rows: h,
+            edge: 0.0,
         }
     }
 
@@ -286,6 +288,46 @@ fn row_box(src: &Work, g: &Grid, _: &Cols, y: u32, out: &mut [Px]) {
     }
 }
 
+/// Edge-preserving reduction: like [`row_box`], but every source pixel is weighted by
+/// how close its color is to the pixel at the center of the block, `exp(-40 s^2 d^2)`
+/// with `d` the color distance on a 0..1 scale and `s` the strength.
+/// At strength 0 the weights are all 1 (a box average); toward 1 pixels across an edge
+/// stop counting and the block keeps the color of its center side.
+fn row_edge(src: &Work, g: &Grid, _: &Cols, y: u32, out: &mut [Px]) {
+    let w = out.len() as f32;
+    let fx = src.width as f32 / w;
+    let fy = src.height as f32 / g.rows as f32;
+    // Strength 0 gives k = 0 (every weight 1, a box average); at 1 a full black to
+    // white step weighs exp(-120), nothing.
+    let strength = g.edge.clamp(0.0, 1.0);
+    let k = -40.0 * strength * strength / (f32::from(MAX15) * f32::from(MAX15));
+    let span = |start: f32, step: f32, len: u32| {
+        let a = (start.floor().max(0.0) as u32).min(len - 1);
+        let b = ((start + step).ceil().max(0.0) as u32).clamp(a + 1, len);
+        (a, b)
+    };
+    let (y0, y1) = span((y as f32 + g.off_y) * fy, fy, src.height);
+    for (x, o) in out.iter_mut().enumerate() {
+        let (x0, x1) = span((x as f32 + g.off_x) * fx, fx, src.width);
+        let center = src.at((x0 + x1 - 1) / 2, (y0 + y1 - 1) / 2);
+        let mut sum = [0f32; 4];
+        let mut total = 0f32;
+        for sy in y0..y1 {
+            for p in &src.row(sy)[x0 as usize..x1 as usize] {
+                let d2: f32 = (0..3)
+                    .map(|c| (f32::from(p[c]) - f32::from(center[c])).powi(2))
+                    .sum();
+                let wt = (d2 * k).exp();
+                total += wt;
+                for c in 0..4 {
+                    sum[c] += f32::from(p[c]) * wt;
+                }
+            }
+        }
+        *o = sum.map(|s| (s / total + 0.5) as u16);
+    }
+}
+
 /// Fills one output row.
 type RowFn = fn(&Work, &Grid, &Cols, u32, &mut [Px]);
 
@@ -296,6 +338,7 @@ fn row_fn(mode: SampleMode) -> RowFn {
         SampleMode::Bicubic => row_bicubic,
         SampleMode::Lanczos => row_lanczos,
         SampleMode::Box => row_box,
+        SampleMode::Edge => row_edge,
     }
 }
 
@@ -378,6 +421,25 @@ pub fn sample(
     pool: &Pool,
     cancel: &Cancel,
 ) -> Result<Work> {
+    sample_with(src, w, h, mode, offset, 0.6, pool, cancel)
+}
+
+/// [`sample`] with an explicit strength for [`SampleMode::Edge`].
+///
+/// # Errors
+///
+/// Fails when the source is empty or the run is cancelled.
+#[allow(clippy::too_many_arguments)] // one per sampling setting
+pub fn sample_with(
+    src: &Work,
+    w: u32,
+    h: u32,
+    mode: SampleMode,
+    offset: (f32, f32),
+    edge: f32,
+    pool: &Pool,
+    cancel: &Cancel,
+) -> Result<Work> {
     if src.width == 0 || src.height == 0 {
         return Err(Error::Invalid {
             name: "source",
@@ -391,7 +453,8 @@ pub fn sample(
         return Ok(out);
     }
     let row = row_fn(mode);
-    let grid = Grid::new(src, w, h, offset.0, offset.1);
+    let mut grid = Grid::new(src, w, h, offset.0, offset.1);
+    grid.edge = edge;
     let cols = match mode {
         SampleMode::Bilinear | SampleMode::Bicubic | SampleMode::Lanczos => {
             Cols::new(&grid, w, mode == SampleMode::Lanczos)
@@ -403,7 +466,9 @@ pub fn sample(
         SampleMode::Bilinear => 4,
         SampleMode::Bicubic => 16,
         SampleMode::Lanczos => 36,
-        SampleMode::Box => (src.width / w).max(1) as usize * (src.height / h).max(1) as usize,
+        SampleMode::Box | SampleMode::Edge => {
+            (src.width / w).max(1) as usize * (src.height / h).max(1) as usize
+        }
     };
     par::rows(&mut out.px, w as usize, cost, cancel, |y, line| {
         row(src, &grid, &cols, y as u32, line);
@@ -428,7 +493,16 @@ pub fn run(src: &Work, s: &Sample, pool: &Pool, cancel: &Cancel) -> Result<Work>
         }
     }
     let (w, h) = s.size.resolve(src.width, src.height);
-    sample(src, w, h, s.mode, (s.offset_x, s.offset_y), pool, cancel)
+    sample_with(
+        src,
+        w,
+        h,
+        s.mode,
+        (s.offset_x, s.offset_y),
+        s.edge_strength,
+        pool,
+        cancel,
+    )
 }
 
 /// Whether a pixel counts as transparent for a given alpha threshold (`0..=255`). Same
@@ -627,6 +701,61 @@ mod tests {
             let many = par::with_threads(8, || run(&src, 97, 61, mode));
             assert_eq!(one, many, "{mode:?}");
         }
+    }
+
+    #[test]
+    fn edge_mode_keeps_hard_edges() {
+        // Left half black, right half white, reduced by 4: the block straddling the edge
+        // turns gray with box and stays near one side with edge.
+        let mut src = Work::new(16, 4, [0, 0, 0, MAX15]).unwrap();
+        for y in 0..4 {
+            for x in 6..16 {
+                let i = src.idx(x, y);
+                src.px[i] = [MAX15, MAX15, MAX15, MAX15];
+            }
+        }
+        let c = Cancel::new();
+        let boxed = sample_with(
+            &src,
+            4,
+            1,
+            SampleMode::Box,
+            (0.0, 0.0),
+            0.0,
+            &Pool::new(),
+            &c,
+        )
+        .unwrap();
+        let edged = sample_with(
+            &src,
+            4,
+            1,
+            SampleMode::Edge,
+            (0.0, 0.0),
+            1.0,
+            &Pool::new(),
+            &c,
+        )
+        .unwrap();
+        let soft = sample_with(
+            &src,
+            4,
+            1,
+            SampleMode::Edge,
+            (0.0, 0.0),
+            0.0,
+            &Pool::new(),
+            &c,
+        )
+        .unwrap();
+        let mid = |w: &Work| w.px[1][0];
+        assert!(mid(&boxed) > 8000 && mid(&boxed) < 24000, "{}", mid(&boxed));
+        assert!(
+            mid(&edged) < 100 || mid(&edged) > MAX15 - 100,
+            "{}",
+            mid(&edged)
+        );
+        assert!(mid(&soft).abs_diff(mid(&boxed)) < 300);
     }
 
     #[test]

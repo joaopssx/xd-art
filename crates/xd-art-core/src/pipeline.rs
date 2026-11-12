@@ -168,8 +168,9 @@ pub fn keys(source_id: u64, s: &Settings) -> [u64; 7] {
         _ => chain(&[], &s.colors.palette),
     };
     let metric = s.colors.metric.name();
+    let mask = s.mask.as_ref().map_or(0, crate::settings::Mask::id);
     let map = chain(
-        &[adjust, palette, Fnv::default().str(metric).finish()],
+        &[adjust, palette, Fnv::default().str(metric).finish(), mask],
         &s.dither,
     );
     let post = chain(&[map], &s.post);
@@ -346,6 +347,7 @@ pub fn exec(stage: Stage, inp: &Inputs<'_>, s: &Settings) -> Result<Data> {
             inp.palette()?,
             s.colors.metric,
             &s.dither,
+            s.mask.as_ref(),
             pool,
             cancel,
         )?),
@@ -856,6 +858,17 @@ mod tests {
         assert_eq!(out.get(0, 0).unwrap()[3], 0, "alpha threshold applied");
         s.colors.palette = PaletteSource::Builtin("nope".into());
         assert!(p.run(&img, 1, &s, &Cancel::new()).is_err());
+    }
+
+    #[test]
+    fn mask_invalidates_only_the_map_stage_on() {
+        use Stage::*;
+        let img = Image::new(4, 4, [9, 9, 9]).unwrap();
+        let mut p = Pipeline::default();
+        let mut s = Settings::default();
+        run(&mut p, &img, 1, &s);
+        s.mask = Some(crate::settings::Mask::new(2, 2, vec![0, 255, 255, 0]).unwrap());
+        assert_eq!(run(&mut p, &img, 1, &s).ran, set(&[Map, Post, Output]));
     }
 
     #[test]
