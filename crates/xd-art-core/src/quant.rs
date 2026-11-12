@@ -269,12 +269,157 @@ pub fn extract(img: &Work, count: u16, method: Quantizer) -> Result<Palette> {
     let colors = match method {
         Quantizer::KMeans => kmeans_palette(&px, usize::from(count), SEED, true),
         Quantizer::MedianCut => median_cut(&px, usize::from(count)),
+        Quantizer::Balanced => balanced(&px, usize::from(count)),
     };
     let name = match method {
         Quantizer::KMeans => "k-means",
         Quantizer::MedianCut => "median cut",
+        Quantizer::Balanced => "balanced",
     };
     Palette::new(name, colors)
+}
+
+/// Frequency with variety: colors are grouped in 32x32x32 cells, then picked greedily
+/// by `pixels * distance to the closest color already picked`. The first pick is the
+/// most common cell; after that a big area of a color close to an existing pick loses
+/// to a smaller area of something new. Each pick is the mean of its cell.
+#[must_use]
+pub fn balanced(px: &[[u8; 3]], count: usize) -> Vec<[u8; 3]> {
+    let mut cells: std::collections::HashMap<u16, (u64, [u64; 3])> =
+        std::collections::HashMap::new();
+    for p in px {
+        let key = (u16::from(p[0] >> 3) << 10) | (u16::from(p[1] >> 3) << 5) | u16::from(p[2] >> 3);
+        let e = cells.entry(key).or_insert((0, [0; 3]));
+        e.0 += 1;
+        for c in 0..3 {
+            e.1[c] += u64::from(p[c]);
+        }
+    }
+    let mut cand: Vec<(u64, [u8; 3])> = cells
+        .into_iter()
+        .map(|(_, (n, s))| (n, s.map(|v| ((v + n / 2) / n) as u8)))
+        .collect();
+    // Ties broken by color so the result does not depend on hash order.
+    cand.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut picked: Vec<[u8; 3]> = Vec::with_capacity(count);
+    let mut near = vec![u64::MAX; cand.len()];
+    while picked.len() < count.min(cand.len()) {
+        let best = (0..cand.len()).filter(|&i| near[i] > 0).max_by_key(|&i| {
+            (
+                cand[i].0.saturating_mul(near[i].min(1 << 40)),
+                std::cmp::Reverse(i),
+            )
+        });
+        let Some(i) = best else { break };
+        let c = cand[i].1;
+        picked.push(c);
+        for (j, (_, other)) in cand.iter().enumerate() {
+            near[j] = near[j].min(dist(*other, c));
+        }
+    }
+    picked
+}
+
+/// k-means where `locked` centers stay put. The free centers are seeded with k-means++
+/// against everything picked so far, locked ones included, and only they move.
+fn kmeans_locked(px: &[[u8; 3]], count: usize, locked: &[[u8; 3]], seed: u64) -> Vec<[u8; 3]> {
+    let mut rng = Rng::new(seed);
+    let mut centers: Vec<[u8; 3]> = locked.to_vec();
+    let mut near: Vec<u64> = px
+        .iter()
+        .map(|&p| locked.iter().map(|&c| dist(p, c)).min().unwrap_or(u64::MAX))
+        .collect();
+    while centers.len() < count {
+        let sum: u64 = near
+            .iter()
+            .fold(0u64, |a, &d| a.saturating_add(d.min(1 << 32)));
+        let pick = if sum == 0 {
+            px[(rng.next_u64() % px.len() as u64) as usize]
+        } else {
+            let target = rng.next_u64() % sum;
+            let mut acc = 0u64;
+            let j = near.iter().position(|&d| {
+                acc = acc.saturating_add(d.min(1 << 32));
+                target < acc
+            });
+            px[j.unwrap_or(0)]
+        };
+        centers.push(pick);
+        for (d, &p) in near.iter_mut().zip(px) {
+            *d = (*d).min(dist(p, pick));
+        }
+    }
+    let fixed = locked.len();
+    for _ in 0..8 {
+        let mut sums = vec![[0u64; 3]; count];
+        let mut counts = vec![0u64; count];
+        for &p in px {
+            let (best, _) = centers
+                .iter()
+                .enumerate()
+                .fold((0, u64::MAX), |b, (i, &c)| {
+                    let d = dist(p, c);
+                    if d < b.1 { (i, d) } else { b }
+                });
+            counts[best] += 1;
+            for c in 0..3 {
+                sums[best][c] += u64::from(p[c]);
+            }
+        }
+        for j in fixed..count {
+            if counts[j] > 0 {
+                centers[j] = sums[j].map(|v| (v / counts[j]) as u8);
+            }
+        }
+    }
+    centers
+}
+
+/// [`extract`] that keeps `locked` colors. They come first in the result, the rest is
+/// built around them: k-means treats them as fixed centers, the other methods build
+/// the whole palette and then give up the colors closest to each locked one.
+///
+/// # Errors
+///
+/// Same as [`extract`], and fails when there are more locked colors than `count`.
+pub fn extract_locked(
+    img: &Work,
+    count: u16,
+    method: Quantizer,
+    locked: &[[u8; 3]],
+) -> Result<Palette> {
+    if locked.is_empty() {
+        return extract(img, count, method);
+    }
+    if locked.len() > usize::from(count) {
+        return Err(Error::Invalid {
+            name: "palette",
+            reason: "more locked colors than colors".into(),
+        });
+    }
+    let px = opaque_rgb(img);
+    if px.is_empty() {
+        return Err(Error::Invalid {
+            name: "palette",
+            reason: "image has no opaque pixels".into(),
+        });
+    }
+    let colors = if method == Quantizer::KMeans {
+        kmeans_locked(&px, usize::from(count), locked, SEED)
+    } else {
+        let mut free = extract(img, count, method)?.colors().to_vec();
+        for l in locked {
+            if let Some((i, _)) = free.iter().enumerate().min_by_key(|(_, c)| dist(**c, *l)) {
+                free.remove(i);
+            }
+        }
+        locked.iter().copied().chain(free).collect()
+    };
+    let mut p = Palette::new("extracted", colors)?;
+    for i in 0..locked.len() {
+        p.set_locked(i, true);
+    }
+    Ok(p)
 }
 
 #[cfg(test)]
@@ -348,7 +493,7 @@ mod tests {
                 a,
             ];
         }
-        for m in [Quantizer::KMeans, Quantizer::MedianCut] {
+        for m in [Quantizer::KMeans, Quantizer::MedianCut, Quantizer::Balanced] {
             let a = extract(&img, 4, m).unwrap();
             let b = extract(&img, 4, m).unwrap();
             assert_eq!(a, b);
@@ -357,6 +502,39 @@ mod tests {
         assert!(extract(&img, 0, Quantizer::KMeans).is_err());
         let clear = Work::new(2, 2, [0; 4]).unwrap();
         assert!(extract(&clear, 4, Quantizer::MedianCut).is_err());
+    }
+
+    #[test]
+    fn balanced_gives_small_distinct_areas_a_color() {
+        let mut px = vec![[200, 200, 200]; 500];
+        px.extend([[205, 200, 200]; 300]);
+        px.extend([[0, 0, 255]; 20]);
+        let pal = balanced(&px, 2);
+        assert!(
+            pal.contains(&[0, 0, 255]) || pal.iter().any(|c| c[2] > 240 && c[0] < 10),
+            "{pal:?}"
+        );
+    }
+
+    #[test]
+    fn locked_colors_survive() {
+        let mut img = Work::new(20, 20, [0; 4]).unwrap();
+        for (p, c) in img.px.iter_mut().zip(two_blobs()) {
+            *p = [
+                u16::from(c[0]) << 7,
+                u16::from(c[1]) << 7,
+                u16::from(c[2]) << 7,
+                0x7f80,
+            ];
+        }
+        let lock = [[255, 0, 255], [1, 2, 3]];
+        for m in [Quantizer::KMeans, Quantizer::MedianCut, Quantizer::Balanced] {
+            let p = extract_locked(&img, 4, m, &lock).unwrap();
+            assert_eq!(&p.colors()[..2], &lock, "{m:?}");
+            assert!(p.is_locked(0) && p.is_locked(1) && !p.is_locked(2));
+            assert_eq!(p.len(), 4);
+        }
+        assert!(extract_locked(&img, 1, Quantizer::KMeans, &lock).is_err());
     }
 
     #[test]

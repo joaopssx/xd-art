@@ -336,11 +336,13 @@ pub fn exec(stage: Stage, inp: &Inputs<'_>, s: &Settings) -> Result<Data> {
                 .colors()
                 .to_vec(),
             PaletteSource::Colors(c) => c.clone(),
-            PaletteSource::Extract { count, method } => {
-                crate::quant::extract(inp.work(Stage::Adjust)?, *count, *method)?
-                    .colors()
-                    .to_vec()
-            }
+            PaletteSource::Extract {
+                count,
+                method,
+                locked,
+            } => crate::quant::extract_locked(inp.work(Stage::Adjust)?, *count, *method, locked)?
+                .colors()
+                .to_vec(),
         }),
         Stage::Map => Data::Indexed(crate::dither::map(
             inp.work(Stage::Adjust)?,
@@ -669,6 +671,7 @@ mod tests {
         s.colors.palette = PaletteSource::Extract {
             count: 4,
             method: Quantizer::KMeans,
+            locked: vec![],
         };
         run(&mut p, &img, 1, &s);
         s.adjust.hue = 30.0;

@@ -259,6 +259,9 @@ pub enum Quantizer {
     /// Iterative clustering, seeded with k-means++.
     #[default]
     KMeans,
+    /// The most frequent colors, each one discounted by how close it is to the colors
+    /// already picked, so small but distinct areas still get a color.
+    Balanced,
 }
 
 /// Where the palette comes from.
@@ -274,6 +277,8 @@ pub enum PaletteSource {
         count: u16,
         /// Algorithm.
         method: Quantizer,
+        /// Colors that must be part of the result, whatever the image looks like.
+        locked: Vec<[u8; 3]>,
     },
 }
 
@@ -675,7 +680,12 @@ impl Settings {
                     "needs 1 to 256 colors",
                 )?;
             }
-            PaletteSource::Extract { count, .. } => {
+            PaletteSource::Extract { count, locked, .. } => {
+                check(
+                    locked.len() <= usize::from(*count),
+                    "palette",
+                    "more locked colors than colors",
+                )?;
                 check(
                     (1..=256).contains(count),
                     "palette",
@@ -826,8 +836,18 @@ impl Fingerprint for PaletteSource {
                     h.bytes(rgb);
                 }
             }
-            Self::Extract { count, method } => {
-                h.u64(2).u64(u64::from(*count)).u64(*method as u64);
+            Self::Extract {
+                count,
+                method,
+                locked,
+            } => {
+                h.u64(2)
+                    .u64(u64::from(*count))
+                    .u64(*method as u64)
+                    .u64(locked.len() as u64);
+                for c in locked {
+                    h.bytes(c);
+                }
             }
         }
     }

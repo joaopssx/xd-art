@@ -29,6 +29,7 @@ pub struct Palette {
     /// Display name. May be empty.
     pub name: String,
     colors: Vec<[u8; 3]>,
+    locked: Vec<bool>,
 }
 
 fn bad(reason: impl Into<String>) -> Error {
@@ -56,6 +57,37 @@ fn three_numbers(line: &str) -> Option<[u8; 3]> {
     Some(c)
 }
 
+fn rgb_to_hsv(c: [u8; 3]) -> (f32, f32, f32) {
+    let [r, g, b] = c.map(|v| f32::from(v) / 255.0);
+    let max = r.max(g).max(b);
+    let d = max - r.min(g).min(b);
+    let h = if d == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    (h, if max == 0.0 { 0.0 } else { d / max }, max)
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r, g, b].map(|v| ((v + m) * 255.0).round() as u8)
+}
+
 impl Palette {
     /// Creates a palette.
     ///
@@ -72,9 +104,11 @@ impl Palette {
                 colors.len()
             )));
         }
+        let locked = vec![false; colors.len()];
         Ok(Self {
             name: name.into(),
             colors,
+            locked,
         })
     }
 
@@ -93,6 +127,124 @@ impl Palette {
     #[must_use]
     pub fn len(&self) -> usize {
         self.colors.len()
+    }
+
+    /// Whether color `i` is locked. Locked colors are kept when the palette is rebuilt
+    /// from the image.
+    #[must_use]
+    pub fn is_locked(&self, i: usize) -> bool {
+        self.locked.get(i).copied().unwrap_or(false)
+    }
+
+    /// Locks or unlocks color `i`. Out of range does nothing.
+    pub fn set_locked(&mut self, i: usize, on: bool) {
+        if let Some(l) = self.locked.get_mut(i) {
+            *l = on;
+        }
+    }
+
+    /// The locked colors, in order.
+    #[must_use]
+    pub fn locked_colors(&self) -> Vec<[u8; 3]> {
+        self.colors
+            .iter()
+            .zip(&self.locked)
+            .filter(|(_, l)| **l)
+            .map(|(c, _)| *c)
+            .collect()
+    }
+
+    /// Replaces color `i`. Out of range does nothing.
+    pub fn set(&mut self, i: usize, c: [u8; 3]) {
+        if let Some(v) = self.colors.get_mut(i) {
+            *v = c;
+        }
+    }
+
+    /// Adds a color at the end.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the palette already has 256 colors.
+    pub fn push(&mut self, c: [u8; 3]) -> Result<()> {
+        if self.colors.len() >= MAX_COLORS {
+            return Err(bad("already has 256 colors"));
+        }
+        self.colors.push(c);
+        self.locked.push(false);
+        Ok(())
+    }
+
+    /// Removes color `i`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `i` is out of range or it is the last color.
+    pub fn remove(&mut self, i: usize) -> Result<[u8; 3]> {
+        if i >= self.colors.len() {
+            return Err(bad(format!("has no color {i}")));
+        }
+        if self.colors.len() == 1 {
+            return Err(bad("needs at least one color"));
+        }
+        self.locked.remove(i);
+        Ok(self.colors.remove(i))
+    }
+
+    /// Moves color `from` to position `to`, shifting the ones in between. Lock flags
+    /// move with their colors.
+    pub fn move_to(&mut self, from: usize, to: usize) {
+        if from >= self.colors.len() || to >= self.colors.len() || from == to {
+            return;
+        }
+        let c = self.colors.remove(from);
+        let l = self.locked.remove(from);
+        self.colors.insert(to, c);
+        self.locked.insert(to, l);
+    }
+
+    fn sort_by_key<K: Ord>(&mut self, key: impl Fn([u8; 3]) -> K) {
+        let mut both: Vec<([u8; 3], bool)> = self
+            .colors
+            .iter()
+            .copied()
+            .zip(self.locked.iter().copied())
+            .collect();
+        both.sort_by_key(|(c, _)| key(*c));
+        (self.colors, self.locked) = both.into_iter().unzip();
+    }
+
+    /// Sorts dark to light (Rec. 601 luma).
+    pub fn sort_by_luminance(&mut self) {
+        self.sort_by_key(|c| 299 * u32::from(c[0]) + 587 * u32::from(c[1]) + 114 * u32::from(c[2]));
+    }
+
+    /// Sorts by hue, grays first (by lightness), then the colors around the wheel.
+    pub fn sort_by_hue(&mut self) {
+        self.sort_by_key(|c| {
+            let (h, s, v) = rgb_to_hsv(c);
+            if s < 0.08 {
+                (0, 0, (v * 1000.0) as u32)
+            } else {
+                (1, (h * 10.0) as u32, (v * 1000.0) as u32)
+            }
+        });
+    }
+
+    /// Shifts every unlocked color: hue in degrees, saturation as a factor, value as an
+    /// offset in `-1..=1`.
+    pub fn adjust_all(&mut self, hue: f32, saturation: f32, value: f32) {
+        for (c, l) in self.colors.iter_mut().zip(&self.locked) {
+            if *l {
+                continue;
+            }
+            let (h, s, v) = rgb_to_hsv(*c);
+            *c = hsv_to_rgb(
+                (h + hue).rem_euclid(360.0),
+                (s * saturation).clamp(0.0, 1.0),
+                (v + value).clamp(0.0, 1.0),
+            );
+        }
     }
 
     /// Always false: a palette has at least one color.
@@ -493,6 +645,48 @@ mod tests {
         assert_eq!(cga.colors()[6], [0xaa, 0x55, 0x00]);
         let rgb = builtin("rgb-332").unwrap();
         assert_eq!(rgb.colors()[255], [255, 255, 255]);
+    }
+
+    #[test]
+    fn editing_keeps_locks_with_their_colors() {
+        let mut p = sample();
+        p.set_locked(1, true);
+        p.move_to(1, 0);
+        assert_eq!(p.colors()[0], [255, 128, 7]);
+        assert!(p.is_locked(0) && !p.is_locked(1));
+        p.sort_by_luminance();
+        assert_eq!(p.colors()[0], [0, 0, 0]);
+        assert_eq!(p.locked_colors(), vec![[255, 128, 7]]);
+        p.push([9, 9, 9]).unwrap();
+        assert_eq!(p.remove(3).unwrap(), [9, 9, 9]);
+        let mut one = Palette::new("", vec![[0; 3]]).unwrap();
+        assert!(one.remove(0).is_err());
+        assert!(one.remove(5).is_err());
+    }
+
+    #[test]
+    fn adjust_all_skips_locked_and_round_trips() {
+        let mut p = Palette::new("", vec![[200, 40, 40], [40, 200, 40]]).unwrap();
+        p.set_locked(1, true);
+        p.adjust_all(0.0, 1.0, 0.0);
+        assert_eq!(p.colors(), &[[200, 40, 40], [40, 200, 40]]);
+        p.adjust_all(120.0, 1.0, 0.0);
+        assert_eq!(p.colors()[0], [40, 200, 40]);
+        assert_eq!(p.colors()[1], [40, 200, 40]);
+    }
+
+    #[test]
+    fn hue_sort_puts_grays_first() {
+        let mut p = Palette::new(
+            "",
+            vec![[0, 0, 255], [128, 128, 128], [255, 0, 0], [0, 255, 0]],
+        )
+        .unwrap();
+        p.sort_by_hue();
+        assert_eq!(
+            p.colors(),
+            &[[128, 128, 128], [255, 0, 0], [0, 255, 0], [0, 0, 255]]
+        );
     }
 
     #[test]
