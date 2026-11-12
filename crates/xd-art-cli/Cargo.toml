@@ -1,0 +1,20 @@
+[package]
+name = "xd-art-cli"
+description = "Command line tool for xd-art"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "xd-art-cli"
+path = "src/main.rs"
+
+[dependencies]
+xd-art-core = { path = "../xd-art-core" }
+
+[lints]
+workspace = true
