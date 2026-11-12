@@ -23,14 +23,8 @@ pub fn to_rgb(c: [u8; 3]) -> Coords {
 /// CIELAB, the original's way.
 #[must_use]
 pub fn to_lab(c: [u8; 3]) -> Coords {
-    let lin = |v: f32| {
-        if v > 0.04045 {
-            ((v + 0.055) / 1.055).powf(2.4)
-        } else {
-            v / 12.92
-        }
-    };
-    let [r, g, b] = to_rgb(c).map(lin);
+    // The sRGB curve for every 8-bit value, computed by build.rs with the same formula.
+    let [r, g, b] = c.map(|v| crate::tables::SRGB_TO_LINEAR[v as usize]);
     let x = r * 0.4124 + g * 0.3576 + b * 0.1805;
     let y = r * 0.2126 + g * 0.7152 + b * 0.0722;
     let z = r * 0.0193 + g * 0.1192 + b * 0.9504;

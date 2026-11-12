@@ -47,4 +47,10 @@ pub mod sampling;
 pub mod settings;
 pub mod suggest;
 
+/// Tables computed by `build.rs`.
+#[allow(clippy::unreadable_literal, clippy::excessive_precision)]
+mod tables {
+    include!(concat!(env!("OUT_DIR"), "/tables.rs"));
+}
+
 pub use error::{Error, Result};

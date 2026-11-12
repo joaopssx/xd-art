@@ -180,3 +180,66 @@ fn metrics_pick_the_same_colors_as_the_original() {
         );
     }
 }
+
+fn dithered(
+    src: &Work,
+    mode: xd_art_core::settings::DitherMode,
+    amount: f32,
+    metric: xd_art_core::settings::Metric,
+) -> Vec<u8> {
+    use xd_art_core::dither;
+    use xd_art_core::settings::Dither;
+    let d = Dither {
+        mode,
+        amount,
+        ..Dither::default()
+    };
+    let out = dither::map(
+        src,
+        &common::PICO8,
+        metric,
+        &d,
+        &Pool::new(),
+        &Cancel::new(),
+    )
+    .unwrap();
+    out.to_image(&common::PICO8).unwrap().to_rgba()
+}
+
+fn dither_case(mode: xd_art_core::settings::DitherMode) {
+    use xd_art_core::settings::Metric;
+    let src = sampled(
+        &common::gradient().to_work(),
+        32,
+        24,
+        SampleMode::Bilinear,
+        (0.0, 0.0),
+    );
+    assert_golden(
+        &format!("dither_{}", mode.name()),
+        32,
+        24,
+        &dithered(&src, mode, 0.4, Metric::Redmean),
+        0,
+    );
+}
+
+#[test]
+fn ordered_dithering_matches_the_original() {
+    use xd_art_core::settings::{DitherMode, Metric};
+    for mode in DitherMode::ALL
+        .into_iter()
+        .filter(|m| m.is_ordered() || *m == DitherMode::None)
+    {
+        dither_case(mode);
+    }
+    let src = sampled(
+        &common::noise().to_work(),
+        32,
+        24,
+        SampleMode::Nearest,
+        (0.0, 0.0),
+    );
+    let out = dithered(&src, DitherMode::Bayer4, 0.9, Metric::Rgb);
+    assert_golden("dither_bayer4x4_alpha", 32, 24, &out, 0);
+}

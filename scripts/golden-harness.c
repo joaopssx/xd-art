@@ -5,7 +5,7 @@ Builds against the algorithm sources of SLK_img2pixel (blur.c, sample.c, sharp.c
 hscb.c, gamma.c, tint.c, dither.c, kmeans.c, shared/color.c, shared/rand.c) and writes
 the results xd-art's tests compare against. See scripts/gen-goldens.sh.
 
-Inputs are synthetic and generated here, so the original's file loaders are not needed.
+Inputs are synthetic and built here, so the original's file loaders are not needed.
 Output format: "XDG1", width and height as little endian u32, then RGBA bytes.
 */
 
