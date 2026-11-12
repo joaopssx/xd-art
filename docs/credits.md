@@ -53,3 +53,25 @@ folder.
 
 Fonts, palettes and any other third party data used by xd-art are listed here with their
 source and license as they are added.
+
+### Built-in palettes
+
+Color values are facts, not creative works, but I still only ship palettes whose origin
+I can state. The source line of each one is also in `palette.rs` and shown in the
+palette picker.
+
+| name | colors | source |
+|---|---|---|
+| `pico-8` | 16 | the published palette of the PICO-8 fantasy console (Lexaloffle) |
+| `game-boy` | 4 | the four greens commonly used to emulate the original Game Boy screen; the hardware had no RGB values, these are a widespread convention |
+| `cga` | 16 | IBM CGA RGBI colors, with color 6 as brown like the IBM 5153 monitor showed it |
+| `1-bit` | 2 | black and white |
+| `gray-4`, `gray-16` | 4, 16 | evenly spaced grays, computed |
+| `dungeon-16` | 16 | made for xd-art |
+| `console-32` | 32 | made for xd-art, in the spirit of 8-bit console palettes; not a copy of any console's |
+| `web-216` | 216 | the web safe color cube, computed |
+| `rgb-332` | 256 | 3-3-2 bit truecolor, computed |
+
+The original program starts with the DawnBringer 32 palette. I left it out because I
+could not find a license statement from its author. It is easy to load from a `.gpl` or
+`.hex` file, or through the optional Lospec import.

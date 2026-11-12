@@ -10,6 +10,9 @@
 //!   in reading order, up to 256. The original takes the first 256 pixels as they come,
 //!   duplicates included; skipping duplicates gives the same palette for the usual one
 //!   pixel per color strips and a usable one for anything else.
+//!
+//! Built-in palettes are stored as short strings and only turned into a [`Palette`]
+//! when one is picked, so having them costs nothing at startup.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -276,6 +279,132 @@ impl Palette {
     }
 }
 
+/// A palette that ships with xd-art.
+#[derive(Clone, Copy, Debug)]
+pub struct Builtin {
+    /// Name used in settings, recipes, the CLI and Lua.
+    pub name: &'static str,
+    /// Where the colors come from, one line.
+    pub source: &'static str,
+    data: Data,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Data {
+    /// `rrggbb` values separated by spaces.
+    Hex(&'static str),
+    /// Evenly spaced gray levels.
+    Gray(u16),
+    /// Every combination of the given levels per channel.
+    Cube(&'static [u8], &'static [u8], &'static [u8]),
+}
+
+/// Built-in palettes, in menu order. Only names and short strings live here; a palette
+/// is built when someone asks for it with [`builtin`].
+pub const BUILTINS: &[Builtin] = &[
+    Builtin {
+        name: "pico-8",
+        source: "PICO-8 fantasy console, the 16 colors of its published specification",
+        data: Data::Hex(
+            "000000 1d2b53 7e2553 008751 ab5236 5f574f c2c3c7 fff1e8 \
+             ff004d ffa300 ffec27 00e436 29adff 83769c ff77a8 ffccaa",
+        ),
+    },
+    Builtin {
+        name: "game-boy",
+        source: "the four greens commonly used to emulate the original Game Boy screen",
+        data: Data::Hex("0f380f 306230 8bac0f 9bbc0f"),
+    },
+    Builtin {
+        name: "cga",
+        source: "IBM CGA 16 color RGBI palette, with dark yellow shown as brown as on the 5153 monitor",
+        data: Data::Hex(
+            "000000 0000aa 00aa00 00aaaa aa0000 aa00aa aa5500 aaaaaa \
+             555555 5555ff 55ff55 55ffff ff5555 ff55ff ffff55 ffffff",
+        ),
+    },
+    Builtin {
+        name: "1-bit",
+        source: "black and white",
+        data: Data::Hex("000000 ffffff"),
+    },
+    Builtin {
+        name: "gray-4",
+        source: "4 evenly spaced grays",
+        data: Data::Gray(4),
+    },
+    Builtin {
+        name: "gray-16",
+        source: "16 evenly spaced grays",
+        data: Data::Gray(16),
+    },
+    Builtin {
+        name: "dungeon-16",
+        source: "xd-art, made for this project: browns, reds and stone grays for dark shooter style art",
+        data: Data::Hex(
+            "0b0907 1f1610 3a2a1c 5b4128 7d5a37 a37a4b c9a46c 3b0e0e \
+             6e1a14 a8321e e0642a f2b04a 2b2d2f 4f5357 80868c b8bec4",
+        ),
+    },
+    Builtin {
+        name: "console-32",
+        source: "xd-art, made for this project: a 32 color set in the spirit of 8-bit home consoles",
+        data: Data::Hex(
+            "000000 1c1c1c 4a4a4a 7c7c7c bcbcbc f8f8f8 0a1a6e 2448c8 \
+             5c94fc a4c8fc 3c0c74 7c3cd8 b884fc 6c0c2c b82c4c f87c9c \
+             8c1800 e44010 fc8c4c fcc49c 5c3c00 a87000 f8b800 fce4a0 \
+             004400 108c18 58d854 b8f8a8 004c58 00a0a8 58f8e8 d8f8f0",
+        ),
+    },
+    Builtin {
+        name: "web-216",
+        source: "the 216 color web safe cube, 6 levels per channel",
+        data: Data::Cube(
+            &[0, 51, 102, 153, 204, 255],
+            &[0, 51, 102, 153, 204, 255],
+            &[0, 51, 102, 153, 204, 255],
+        ),
+    },
+    Builtin {
+        name: "rgb-332",
+        source: "8-bit truecolor: 8 levels of red and green, 4 of blue",
+        data: Data::Cube(
+            &[0, 36, 73, 109, 146, 182, 219, 255],
+            &[0, 36, 73, 109, 146, 182, 219, 255],
+            &[0, 85, 170, 255],
+        ),
+    },
+];
+
+/// Names of the built-in palettes, in menu order.
+pub fn builtin_names() -> impl Iterator<Item = &'static str> {
+    BUILTINS.iter().map(|b| b.name)
+}
+
+/// Builds a built-in palette by name.
+#[must_use]
+pub fn builtin(name: &str) -> Option<Palette> {
+    let b = BUILTINS.iter().find(|b| b.name == name)?;
+    let colors = match b.data {
+        Data::Hex(s) => s.split_whitespace().filter_map(hex6).collect(),
+        Data::Gray(n) => (0..n)
+            .map(|i| [(u32::from(i) * 255 / u32::from(n - 1)) as u8; 3])
+            .collect(),
+        Data::Cube(r, g, bl) => {
+            let mut v = Vec::with_capacity(r.len() * g.len() * bl.len());
+            for &r in r {
+                for &g in g {
+                    for &b in bl {
+                        v.push([r, g, b]);
+                    }
+                }
+            }
+            v
+        }
+    };
+    Palette::new(b.name, colors).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,6 +468,31 @@ mod tests {
             Palette::from_image(&p.to_image()).unwrap().colors(),
             p.colors()
         );
+    }
+
+    #[test]
+    fn every_builtin_builds() {
+        let expect = [16, 4, 16, 2, 4, 16, 16, 32, 216, 256];
+        for (b, n) in BUILTINS.iter().zip(expect) {
+            let p = builtin(b.name).unwrap();
+            assert_eq!(p.len(), n, "{}", b.name);
+            assert!(!b.source.is_empty());
+        }
+        assert_eq!(builtin_names().count(), expect.len());
+        assert!(builtin("nope").is_none());
+    }
+
+    #[test]
+    fn builtin_values_match_their_sources() {
+        let pico = builtin("pico-8").unwrap();
+        assert_eq!(pico.colors()[8], [0xff, 0x00, 0x4d]);
+        assert_eq!(pico.colors()[15], [0xff, 0xcc, 0xaa]);
+        let gray = builtin("gray-4").unwrap();
+        assert_eq!(gray.colors(), &[[0; 3], [85; 3], [170; 3], [255; 3]]);
+        let cga = builtin("cga").unwrap();
+        assert_eq!(cga.colors()[6], [0xaa, 0x55, 0x00]);
+        let rgb = builtin("rgb-332").unwrap();
+        assert_eq!(rgb.colors()[255], [255, 255, 255]);
     }
 
     #[test]
