@@ -243,3 +243,23 @@ fn ordered_dithering_matches_the_original() {
     let out = dithered(&src, DitherMode::Bayer4, 0.9, Metric::Rgb);
     assert_golden("dither_bayer4x4_alpha", 32, 24, &out, 0);
 }
+
+#[test]
+fn error_diffusion_and_picocad_match_the_original() {
+    use xd_art_core::settings::{DitherMode, Metric};
+    for mode in DitherMode::ALL
+        .into_iter()
+        .filter(|m| m.is_diffusion() || *m == DitherMode::Picocad)
+    {
+        dither_case(mode);
+    }
+    let src = sampled(
+        &common::noise().to_work(),
+        32,
+        24,
+        SampleMode::Nearest,
+        (0.0, 0.0),
+    );
+    let out = dithered(&src, DitherMode::Floyd, 0.4, Metric::Redmean);
+    assert_golden("dither_floyd_alpha", 32, 24, &out, 0);
+}

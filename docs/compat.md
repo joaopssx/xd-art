@@ -20,6 +20,7 @@ of that build. Commit used: see `crates/xd-art-core/tests/golden/SOURCE`.
 | sharpen, tint | identical |
 | hue/saturation/contrast/brightness, gamma | within 1 step |
 | closest color, all six metrics | identical |
+| every dither mode except median cut, including transparency | identical |
 
 ## Kept on purpose, although they look like bugs
 
@@ -55,6 +56,13 @@ same settings, which is the one thing the port promises not to do.
   by C's `rand()`, which depends on the C library and, with OpenMP, on thread timing.
   xd-art picks it with its own seeded generator. On the test images the case never
   happens and the results are identical.
+- **Median cut assignment.** The original sorts boxes with `qsort`, which is not
+  stable, so pixels with equal values on the split channel can land in either box
+  depending on the C library. xd-art sorts stably. The assignment of palette colors to
+  boxes is an optimal one in both, but where several assignments have the same total
+  cost the two programs may pick different ones. I wrote the assignment (Hungarian
+  method) from the textbook description instead of porting the original's, which is
+  third party code under its own license.
 - **k-means seed.** The original seeds palette generation with the current time, so it gives a
   different palette on every run. xd-art uses a fixed seed: the same image and settings
   always give the same palette, which recipes depend on.
