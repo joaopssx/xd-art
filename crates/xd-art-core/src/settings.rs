@@ -438,6 +438,11 @@ pub struct Post {
     pub outline: Option<u8>,
     /// Palette index drawn on the edge pixels inside opaque shapes.
     pub inline: Option<u8>,
+    /// Isolated pixel removal: 0 off, 1 only fully surrounded dots, 2 also dots with
+    /// three matching neighbours that are not part of a line.
+    pub cleanup: u8,
+    /// Palette colors closer than this (8-bit RGB distance) are merged. 0 is off.
+    pub merge: u8,
 }
 
 /// Final scaling of the result.
@@ -598,6 +603,7 @@ impl Settings {
             "target colors",
             "must be in 1..256",
         )?;
+        check(self.post.cleanup <= 2, "cleanup", "must be 0, 1 or 2")?;
         check(
             (1..=64).contains(&self.output.scale),
             "output scale",
@@ -752,6 +758,7 @@ impl Fingerprint for Post {
     fn feed(&self, h: &mut Fnv) {
         h.u64(self.outline.map_or(u64::MAX, u64::from));
         h.u64(self.inline.map_or(u64::MAX, u64::from));
+        h.u64(u64::from(self.cleanup)).u64(u64::from(self.merge));
     }
 }
 

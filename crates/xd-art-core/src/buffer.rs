@@ -229,6 +229,51 @@ impl Image {
         self.rgb.len() + self.alpha.as_ref().map_or(0, Vec::len)
     }
 
+    /// Every pixel repeated `k` times on both axes, for crisp enlarged output.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `k` is 0 or the result would not fit in memory.
+    pub fn upscale(&self, k: u32) -> Result<Image> {
+        if k == 1 {
+            return Ok(self.clone());
+        }
+        let (w, h) = (self.width.checked_mul(k), self.height.checked_mul(k));
+        let (Some(w), Some(h)) = (w, h) else {
+            return Err(Error::Invalid {
+                name: "scale",
+                reason: format!("{k}x is too large"),
+            });
+        };
+        let len = checked_len(w, h, 3)?;
+        let k = k as usize;
+        let mut rgb = Vec::with_capacity(len);
+        let mut alpha = self.alpha.as_ref().map(|_| Vec::with_capacity(len / 3));
+        for y in 0..self.height {
+            let row = self.row(y);
+            let start = rgb.len();
+            for p in row.chunks_exact(3) {
+                for _ in 0..k {
+                    rgb.extend_from_slice(p);
+                }
+            }
+            let line = rgb[start..].to_vec();
+            for _ in 1..k {
+                rgb.extend_from_slice(&line);
+            }
+            if let (Some(out), Some(a)) = (&mut alpha, &self.alpha) {
+                let src =
+                    &a[y as usize * self.width as usize..(y as usize + 1) * self.width as usize];
+                for _ in 0..k {
+                    for &v in src {
+                        out.extend(std::iter::repeat_n(v, k));
+                    }
+                }
+            }
+        }
+        Image::from_parts(w, h, rgb, alpha)
+    }
+
     /// Converts to the working format.
     #[must_use]
     pub fn to_work(&self) -> Work {
@@ -476,6 +521,17 @@ mod tests {
         img.write_work(&mut w);
         assert_eq!(w.px.capacity(), cap);
         assert_eq!(w.at(3, 3), [to15(10), to15(20), to15(30), OPAQUE]);
+    }
+
+    #[test]
+    fn upscale_repeats_pixels() {
+        let img = Image::from_rgba(2, 1, &[1, 2, 3, 255, 4, 5, 6, 0]).unwrap();
+        let big = img.upscale(3).unwrap();
+        assert_eq!((big.width(), big.height()), (6, 3));
+        assert_eq!(big.get(2, 2), Some([1, 2, 3, 255]));
+        assert_eq!(big.get(3, 0), Some([4, 5, 6, 0]));
+        assert!(img.upscale(0).is_err());
+        assert_eq!(img.upscale(1).unwrap(), img);
     }
 
     #[test]

@@ -301,6 +301,69 @@ fn missing(stage: Stage) -> Error {
     }
 }
 
+/// The engine's stages, as [`Pipeline::run`] uses them.
+///
+/// # Errors
+///
+/// Fails when a stage fails: unknown built-in palette, cancelled run, and so on.
+pub fn exec(stage: Stage, inp: &Inputs<'_>, s: &Settings) -> Result<Data> {
+    let (pool, cancel) = (inp.pool(), inp.cancel());
+    Ok(match stage {
+        Stage::Blur => {
+            let mut w = pool.work(0, 0, [0; 4]);
+            inp.source().write_work(&mut w);
+            crate::prep::blur(&mut w, &s.blur, pool, cancel)?;
+            Data::Work(w)
+        }
+        Stage::Sample => Data::Work(crate::sampling::run(
+            inp.work(Stage::Blur)?,
+            &s.sample,
+            pool,
+            cancel,
+        )?),
+        Stage::Adjust => {
+            let mut w = pool.copy(inp.work(Stage::Sample)?);
+            crate::prep::adjust(&mut w, &s.adjust, pool, cancel)?;
+            Data::Work(w)
+        }
+        Stage::Palette => Data::Palette(match &s.colors.palette {
+            PaletteSource::Builtin(name) => crate::palette::builtin(name)
+                .ok_or_else(|| Error::Invalid {
+                    name: "palette",
+                    reason: format!("no built-in palette named {name}"),
+                })?
+                .colors()
+                .to_vec(),
+            PaletteSource::Colors(c) => c.clone(),
+            PaletteSource::Extract { count, method } => {
+                crate::quant::extract(inp.work(Stage::Adjust)?, *count, *method)?
+                    .colors()
+                    .to_vec()
+            }
+        }),
+        Stage::Map => Data::Indexed(crate::dither::map(
+            inp.work(Stage::Adjust)?,
+            inp.palette()?,
+            s.colors.metric,
+            &s.dither,
+            pool,
+            cancel,
+        )?),
+        Stage::Post => {
+            let src = inp.indexed(Stage::Map)?;
+            let mut ix = pool.indexed(src.width, src.height);
+            ix.index.copy_from_slice(&src.index);
+            ix.clear.clone_from(&src.clear);
+            crate::post::apply(&mut ix, inp.palette()?, &s.post);
+            Data::Indexed(ix)
+        }
+        Stage::Output => {
+            let img = inp.indexed(Stage::Post)?.to_image(inp.palette()?)?;
+            Data::Image(img.upscale(s.output.scale)?)
+        }
+    })
+}
+
 /// Runs stages and remembers their results.
 pub struct Pipeline {
     policy: CachePolicy,
@@ -339,6 +402,21 @@ impl Pipeline {
                 self.current[*st as usize].as_ref().map(|c| c.0) != Some(keys[*st as usize])
             })
             .collect()
+    }
+
+    /// Runs every stage that is out of date with the engine's own stages.
+    ///
+    /// # Errors
+    ///
+    /// Fails on invalid settings, when a stage fails, or when the run is cancelled.
+    pub fn run(
+        &mut self,
+        source: &Image,
+        source_id: u64,
+        s: &Settings,
+        cancel: &Cancel,
+    ) -> Result<Report> {
+        self.run_with(source, source_id, s, cancel, exec)
     }
 
     /// Runs every stage that is out of date, calling `exec` for each one that is not in
@@ -736,6 +814,48 @@ mod tests {
         s.sample.offset_x = 0.5;
         p.run_with(&img, 1, &s, &Cancel::new(), fake).unwrap();
         assert!(p.pool().held() >= 2);
+    }
+
+    #[test]
+    fn real_stages_end_to_end() {
+        let mut img = Image::new(64, 48, [0; 3]).unwrap();
+        for y in 0..48 {
+            for x in 0..64 {
+                img.set(
+                    x,
+                    y,
+                    [
+                        (x * 4) as u8,
+                        (y * 5) as u8,
+                        128,
+                        if x < 4 { 0 } else { 255 },
+                    ],
+                );
+            }
+        }
+        let mut s = Settings::default();
+        s.sample.size = crate::settings::Size::Absolute {
+            width: 16,
+            height: 12,
+            keep_aspect: false,
+        };
+        s.output.scale = 2;
+        s.dither.mode = DitherMode::Floyd;
+        let mut p = Pipeline::default();
+        let r = p.run(&img, 1, &s, &Cancel::new()).unwrap();
+        assert_eq!(r.ran, set(&Stage::ALL));
+        let out = p.output().unwrap();
+        assert_eq!((out.width(), out.height()), (32, 24));
+        let pico = crate::palette::builtin("pico-8").unwrap();
+        for y in 0..out.height() {
+            for x in 0..out.width() {
+                let px = out.get(x, y).unwrap();
+                assert!(px[3] == 0 || pico.colors().contains(&[px[0], px[1], px[2]]));
+            }
+        }
+        assert_eq!(out.get(0, 0).unwrap()[3], 0, "alpha threshold applied");
+        s.colors.palette = PaletteSource::Builtin("nope".into());
+        assert!(p.run(&img, 1, &s, &Cancel::new()).is_err());
     }
 
     #[test]

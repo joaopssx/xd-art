@@ -25,6 +25,8 @@
 // Ported code compares floats exactly where the original does (hue sectors, "is this
 // setting at its default"); a tolerance would change results.
 #![allow(clippy::float_cmp)]
+// Counts here run over a handful of neighbours, not buffers worth a dependency.
+#![allow(clippy::naive_bytecount)]
 
 pub mod anim;
 pub mod buffer;
