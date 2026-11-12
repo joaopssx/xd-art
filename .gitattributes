@@ -4,3 +4,4 @@
 *.ttf binary
 *.ps1 text eol=crlf
 *.reg text eol=crlf
+*.rgba binary
