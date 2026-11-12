@@ -92,3 +92,17 @@ the program is about.
 None of these decoders can decode at a reduced scale, so the large image path decodes
 once and then averages integer blocks. A memory limit (1 GiB by default, passed to
 `image` as `max_alloc`) rejects files whose header asks for more.
+
+## 2026-11-12: settings split per stage, defaults from the original
+
+`Settings` is one struct per pipeline stage so each stage can be fingerprinted on its
+own. The defaults are the ones of the original program's interface (64x64 nearest, no
+dithering, redmean, alpha threshold 128, dither amount 0.2).
+
+One default differs: the original starts with the DawnBringer 32 palette. I could not
+find a license statement for it from its author, so xd-art starts with PICO-8, whose 16
+colors are a published spec of the console. More on palette sources in
+[credits.md](credits.md).
+
+Fingerprints use FNV-1a instead of `std`'s hasher, because they must be the same on every
+run and every platform (they end up in recipes and in the CI speed check).
