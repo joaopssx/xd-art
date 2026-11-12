@@ -15,7 +15,7 @@ use crate::buffer::{MAX15, Px, Work, to8, to15};
 use crate::cancel::Cancel;
 use crate::pool::Pool;
 use crate::quant::{self, Scratch};
-use crate::settings::SampleMode;
+use crate::settings::{Sample, SampleMode};
 use crate::{Error, Result};
 
 /// What the original uses for pixels outside the image: black with full alpha.
@@ -310,6 +310,34 @@ pub fn sample(
     Ok(out)
 }
 
+/// Samples `src` with the sampling settings: target size (absolute, absolute keeping the
+/// aspect ratio, or a divisor of the source size), mode and offsets.
+///
+/// # Errors
+///
+/// Fails when the source is empty, an offset is out of `-1..=1`, or the run is
+/// cancelled.
+pub fn run(src: &Work, s: &Sample, pool: &Pool, cancel: &Cancel) -> Result<Work> {
+    for (v, name) in [(s.offset_x, "offset x"), (s.offset_y, "offset y")] {
+        if !(v.is_finite() && (-1.0..=1.0).contains(&v)) {
+            return Err(Error::Invalid {
+                name,
+                reason: "must be in -1..1".into(),
+            });
+        }
+    }
+    let (w, h) = s.size.resolve(src.width, src.height);
+    sample(src, w, h, s.mode, (s.offset_x, s.offset_y), pool, cancel)
+}
+
+/// Whether a pixel counts as transparent for a given alpha threshold (`0..=255`). Same
+/// test as the original: the 8-bit alpha, truncated, below the threshold.
+#[inline]
+#[must_use]
+pub fn is_clear(p: Px, threshold: u8) -> bool {
+    p[3] / 128 < u16::from(threshold)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::float_cmp)] // kernel values at exact points
@@ -418,6 +446,65 @@ mod tests {
             "{:?}",
             out.px
         );
+    }
+
+    #[test]
+    fn run_resolves_sizes() {
+        use crate::settings::Size;
+        let src = ramp(40, 20);
+        let pool = Pool::new();
+        let c = Cancel::new();
+        let mut s = Sample {
+            size: Size::Relative { x: 4, y: 5 },
+            ..Sample::default()
+        };
+        let out = super::run(&src, &s, &pool, &c).unwrap();
+        assert_eq!((out.width, out.height), (10, 4));
+        s.size = Size::Absolute {
+            width: 8,
+            height: 99,
+            keep_aspect: true,
+        };
+        let out = super::run(&src, &s, &pool, &c).unwrap();
+        assert_eq!((out.width, out.height), (8, 4));
+        s.offset_x = 1.5;
+        assert!(super::run(&src, &s, &pool, &c).is_err());
+    }
+
+    #[test]
+    fn offsets_move_the_sample_grid() {
+        let src = ramp(16, 1);
+        let pool = Pool::new();
+        let c = Cancel::new();
+        let at = |off: f32| {
+            let s = Sample {
+                size: crate::settings::Size::Absolute {
+                    width: 4,
+                    height: 1,
+                    keep_aspect: false,
+                },
+                offset_x: off,
+                ..Sample::default()
+            };
+            super::run(&src, &s, &pool, &c)
+                .unwrap()
+                .px
+                .iter()
+                .map(|p| p[0] / to15(10))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(at(0.0), [2, 6, 9, 13]);
+        assert_eq!(at(1.0), [6, 9, 13, 15]);
+        assert_eq!(at(-1.0), [0, 2, 6, 9]);
+    }
+
+    #[test]
+    fn alpha_threshold_matches_the_original_test() {
+        assert!(is_clear([0, 0, 0, to15(127)], 128));
+        assert!(!is_clear([0, 0, 0, to15(128)], 128));
+        assert!(!is_clear([0, 0, 0, 0], 0));
+        assert!(is_clear([0, 0, 0, to15(255) - 1], 255));
+        assert!(!is_clear([0, 0, 0, to15(255)], 255));
     }
 
     #[test]
