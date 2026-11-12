@@ -86,8 +86,8 @@ pub fn crt(img: &Image, amount: f32) -> Image {
             let p = if su.abs() > 1.0 || sv.abs() > 1.0 {
                 [0, 0, 0, 255]
             } else {
-                let sx = ((su * 0.5 + 0.5) * w) as u32.min(img.width() - 1);
-                let sy = ((sv * 0.5 + 0.5) * h) as u32.min(img.height() - 1);
+                let sx = (((su * 0.5 + 0.5) * w) as u32).min(img.width() - 1);
+                let sy = (((sv * 0.5 + 0.5) * h) as u32).min(img.height() - 1);
                 let p = img.get(sx, sy).unwrap_or([0, 0, 0, 255]);
                 let shade = 1.0 - amount * 0.35 * r2 / 2.0;
                 let d = |c: u8| (f32::from(c) * shade).round() as u8;

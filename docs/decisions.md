@@ -177,3 +177,14 @@ the per row progress counters use release and acquire, which is enough because t
 guarantees no two threads touch the same pixel at once. No `unsafe` needed.
 
 Images below 65,536 pixels skip the wavefront; starting threads costs more there.
+
+## 2026-11-12: a broken commit and a fix commit
+
+The commit that added the export effects (scanlines, CRT, palette cycling) went in with
+`export.rs` not compiling: an `as u32` cast without parentheses before `.min()`. My
+check script piped its output through `tail`, which hid the failing exit code. The
+next commit fixes the file, and the script now keeps the exit code.
+
+The history keeps both commits instead of rewriting the first one. To stay at the
+planned number of steps, the tagged release workflow goes into the same commit as the
+release documentation instead of a commit of its own.
