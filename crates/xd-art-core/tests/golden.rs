@@ -99,3 +99,45 @@ fn blur_matches_the_original_exactly() {
         assert_golden(name, 48, 40, &work_rgba(&img), 0);
     }
 }
+
+fn adjusted(f: impl FnOnce(&mut Work)) -> Vec<u8> {
+    let mut img = sampled(
+        &common::noise().to_work(),
+        24,
+        20,
+        SampleMode::Nearest,
+        (0.0, 0.0),
+    );
+    f(&mut img);
+    work_rgba(&img)
+}
+
+#[test]
+fn adjustments_match_the_original() {
+    use xd_art_core::prep;
+    use xd_art_core::settings::Adjust;
+    let (pool, c) = (Pool::new(), Cancel::new());
+    let a = adjusted(|i| prep::sharpen(i, 0.8, &pool, &c).unwrap());
+    assert_golden("adjust_sharpen", 24, 20, &a, 0);
+    let set = Adjust {
+        hue: 40.0,
+        saturation: 1.3,
+        contrast: 1.2,
+        brightness: 0.05,
+        ..Adjust::default()
+    };
+    let a = adjusted(|i| prep::hscb(i, &set, &c).unwrap());
+    assert_golden("adjust_hscb", 24, 20, &a, FLOAT_TOL);
+    let set = Adjust {
+        saturation: 0.4,
+        contrast: 0.7,
+        brightness: -0.1,
+        ..Adjust::default()
+    };
+    let a = adjusted(|i| prep::hscb(i, &set, &c).unwrap());
+    assert_golden("adjust_hscb_nohue", 24, 20, &a, FLOAT_TOL);
+    let a = adjusted(|i| prep::gamma(i, 1.6, &c).unwrap());
+    assert_golden("adjust_gamma", 24, 20, &a, FLOAT_TOL);
+    let a = adjusted(|i| prep::tint(i, [200, 150, 255], 1.0, &c).unwrap());
+    assert_golden("adjust_tint", 24, 20, &a, 0);
+}

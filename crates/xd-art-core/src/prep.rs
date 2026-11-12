@@ -1,6 +1,7 @@
-//! Blur on the source image, before sampling.
+//! Preparation: the blur on the source before sampling, and the color adjustments on
+//! the sampled image.
 //!
-//! Two implementations:
+//! The blur has two implementations:
 //!
 //! - A separable gaussian with a normalized kernel and clamped edges. The kernel for a
 //!   radius is built once and cached. From [`Blur::box_from`] up, three box passes with
@@ -17,11 +18,11 @@
 use std::sync::{Arc, Mutex};
 
 use crate::Result;
-use crate::buffer::{Px, Work};
+use crate::buffer::{MAX15, Px, Work};
 use crate::cancel::Cancel;
 use crate::par;
 use crate::pool::Pool;
-use crate::settings::Blur;
+use crate::settings::{Adjust, Blur};
 
 /// Radii at or below this do nothing, as in the original.
 const MIN_RADIUS: f32 = 0.01;
@@ -355,10 +356,180 @@ fn transpose(src: &[Px], dst: &mut [Px], w: usize, h: usize) {
     }
 }
 
+/// Applies sharpen, hue, saturation, contrast, brightness, gamma and tint, in the
+/// original's order, on the sampled image.
+///
+/// # Errors
+///
+/// Fails when the run is cancelled.
+pub fn adjust(img: &mut Work, a: &Adjust, pool: &Pool, cancel: &Cancel) -> Result<()> {
+    sharpen(img, a.sharpen, pool, cancel)?;
+    hscb(img, a, cancel)?;
+    gamma(img, a.gamma, cancel)?;
+    tint(img, a.tint, a.tint_strength, cancel)
+}
+
+/// Unsharp mask against the original's blur at radius 1, in fixed point:
+/// `c + (c - blurred) * amount`. Alpha is left alone.
+///
+/// # Errors
+///
+/// Fails when the run is cancelled.
+pub fn sharpen(img: &mut Work, amount: f32, pool: &Pool, cancel: &Cancel) -> Result<()> {
+    if amount < 1e-2 {
+        return Ok(());
+    }
+    let mut blurred = pool.copy(img);
+    box_blur(&mut blurred, 1.0, pool, cancel)?;
+    let k = (amount * 256.0) as i32;
+    let w = img.width as usize;
+    let b = &blurred.px;
+    par::rows(&mut img.px, w, 1, cancel, |y, row| {
+        for (p, q) in row.iter_mut().zip(&b[y * w..(y + 1) * w]) {
+            for c in 0..3 {
+                let (v, vb) = (i32::from(p[c]), i32::from(q[c]));
+                p[c] = (v + (v - vb) * k / 256).clamp(0, i32::from(MAX15)) as u16;
+            }
+        }
+    })?;
+    pool.recycle(blurred);
+    Ok(())
+}
+
+/// Rotates the hue of one pixel through HSV, like the original (including its quirk of
+/// turning a hue of exactly 360 degrees into black).
+fn rotate_hue(p: &mut Px, hue: f32) {
+    let m15 = f32::from(MAX15);
+    let (r, g, b) = (
+        f32::from(p[0]) / m15,
+        f32::from(p[1]) / m15,
+        f32::from(p[2]) / m15,
+    );
+    let cmax = r.max(g.max(b));
+    let cmin = r.min(g.min(b));
+    let diff = cmax - cmin;
+    let mut h = if cmax == cmin {
+        0.0
+    } else if cmax == r {
+        ((g - b) / diff) % 6.0
+    } else if cmax == g {
+        (b - r) / diff + 2.0
+    } else {
+        (r - g) / diff + 4.0
+    };
+    h *= 60.0;
+    // 0 / 0 for black, as in the original; the NaN ends up as 0 below either way.
+    let s = diff / cmax;
+    let v = cmax;
+    h += hue;
+    while h < 0.0 {
+        h += 360.0;
+    }
+    while h > 360.0 {
+        h -= 360.0;
+    }
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match h {
+        h if (0.0..60.0).contains(&h) => (c + m, x + m, m),
+        h if (60.0..120.0).contains(&h) => (x + m, c + m, m),
+        h if (120.0..180.0).contains(&h) => (m, c + m, x + m),
+        h if (180.0..240.0).contains(&h) => (m, x + m, c + m),
+        h if (240.0..300.0).contains(&h) => (x + m, m, c + m),
+        h if (300.0..360.0).contains(&h) => (c + m, m, x + m),
+        _ => (0.0, 0.0, 0.0),
+    };
+    let to = |v: f32| ((m15 * v) as i32).clamp(0, i32::from(MAX15)) as u16;
+    p[0] = to(r);
+    p[1] = to(g);
+    p[2] = to(b);
+}
+
+/// Hue, saturation, contrast and brightness as one color matrix, the original's
+/// formulation. With the defaults the matrix is the identity and nothing runs.
+///
+/// # Errors
+///
+/// Fails when the run is cancelled.
+pub fn hscb(img: &mut Work, a: &Adjust, cancel: &Cancel) -> Result<()> {
+    let (hue, sat, con, bri) = (a.hue, a.saturation, a.contrast, a.brightness);
+    if hue == 0.0 && sat == 1.0 && con == 1.0 && bri == 0.0 {
+        return Ok(());
+    }
+    let t = (1.0 - con) / 2.0;
+    let sr = (1.0 - sat) * 0.3086;
+    let sg = (1.0 - sat) * 0.6094;
+    let sb = (1.0 - sat) * 0.0820;
+    let (rr, rg, rb) = (con * (sr + sat), con * sr, con * sr);
+    let (gr, gg, gb) = (con * sg, con * (sg + sat), con * sg);
+    let (br, bg, bb) = (con * sb, con * sb, con * (sb + sat));
+    let wv = (t + bri) * f32::from(MAX15);
+    let clamp = |v: f32| (v as i32).clamp(0, i32::from(MAX15)) as u16;
+    let w = img.width as usize;
+    par::rows(&mut img.px, w, 1, cancel, |_, row| {
+        for p in row {
+            if hue != 0.0 {
+                rotate_hue(p, hue);
+            }
+            let (fr, fg, fb) = (f32::from(p[0]), f32::from(p[1]), f32::from(p[2]));
+            p[0] = clamp(rr * fr + gr * fg + br * fb + wv);
+            p[1] = clamp(rg * fr + gg * fg + bg * fb + wv);
+            p[2] = clamp(rb * fr + gb * fg + bb * fb + wv);
+        }
+    })
+}
+
+/// `c = max * (c / max) ^ gamma` per color channel. 0 and 1 do nothing.
+///
+/// # Errors
+///
+/// Fails when the run is cancelled.
+pub fn gamma(img: &mut Work, gamma: f32, cancel: &Cancel) -> Result<()> {
+    // The original skips 0 only; 1 is the identity anyway (up to powf rounding, which
+    // is exact for an exponent of 1).
+    if gamma == 0.0 || gamma == 1.0 {
+        return Ok(());
+    }
+    let m15 = f32::from(MAX15);
+    let w = img.width as usize;
+    par::rows(&mut img.px, w, 1, cancel, |_, row| {
+        for p in row {
+            for c in 0..3 {
+                let v = m15 * (f32::from(p[c]) / m15).powf(gamma);
+                p[c] = (v as i32).clamp(0, i32::from(MAX15)) as u16;
+            }
+        }
+    })
+}
+
+/// Multiplies every color channel by `tint / 255`, in integers like the original.
+/// `strength` blends the tint toward white first: 1 is the full tint, 0 is none.
+///
+/// # Errors
+///
+/// Fails when the run is cancelled.
+pub fn tint(img: &mut Work, tint: [u8; 3], strength: f32, cancel: &Cancel) -> Result<()> {
+    let t = tint.map(|v| {
+        let v = 255.0 - strength.clamp(0.0, 1.0) * (255.0 - f32::from(v));
+        u32::from(v.round() as u8)
+    });
+    if t == [255; 3] {
+        return Ok(());
+    }
+    let w = img.width as usize;
+    par::rows(&mut img.px, w, 1, cancel, |_, row| {
+        for p in row {
+            for c in 0..3 {
+                p[c] = (u32::from(p[c]) * t[c] / 255) as u16;
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffer::MAX15;
 
     fn noise(w: u32, h: u32) -> Work {
         let mut img = Work::new(w, h, [0; 4]).unwrap();
@@ -567,6 +738,45 @@ mod tests {
         let mut g = src.clone();
         blur(&mut g, &b, &Pool::new(), &Cancel::new()).unwrap();
         assert_ne!(g, f);
+    }
+
+    #[test]
+    fn default_adjustments_change_nothing() {
+        let mut img = noise(16, 16);
+        let before = img.clone();
+        adjust(&mut img, &Adjust::default(), &Pool::new(), &Cancel::new()).unwrap();
+        assert_eq!(img, before);
+        // Contrast 1 and saturation 1 make the color matrix the identity, so running it
+        // with a tiny brightness that rounds away must not change anything either.
+        let a = Adjust {
+            brightness: 1e-9,
+            ..Adjust::default()
+        };
+        hscb(&mut img, &a, &Cancel::new()).unwrap();
+        assert_eq!(img, before);
+    }
+
+    #[test]
+    fn hue_rotation_keeps_gray_and_black() {
+        for v in [0u16, 5000, MAX15] {
+            let mut p = [v, v, v, MAX15];
+            rotate_hue(&mut p, 90.0);
+            assert_eq!(p, [v, v, v, MAX15]);
+        }
+        let mut red = [MAX15, 0, 0, 1];
+        rotate_hue(&mut red, 120.0);
+        assert_eq!(red, [0, MAX15, 0, 1]);
+    }
+
+    #[test]
+    fn tint_strength_blends_toward_white() {
+        let base = Work::new(1, 1, [1000, 1000, 1000, MAX15]).unwrap();
+        let mut full = base.clone();
+        tint(&mut full, [0, 127, 255], 1.0, &Cancel::new()).unwrap();
+        assert_eq!(full.px[0], [0, (1000u32 * 127 / 255) as u16, 1000, MAX15]);
+        let mut none = base.clone();
+        tint(&mut none, [0, 0, 0], 0.0, &Cancel::new()).unwrap();
+        assert_eq!(none, base);
     }
 
     #[test]

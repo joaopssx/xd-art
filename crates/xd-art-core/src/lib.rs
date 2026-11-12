@@ -22,6 +22,9 @@
 #![allow(clippy::many_single_char_names, clippy::similar_names)]
 // Channel loops index two or three arrays with the same `c`; iterators make that worse.
 #![allow(clippy::needless_range_loop)]
+// Ported code compares floats exactly where the original does (hue sectors, "is this
+// setting at its default"); a tolerance would change results.
+#![allow(clippy::float_cmp)]
 
 pub mod anim;
 pub mod buffer;

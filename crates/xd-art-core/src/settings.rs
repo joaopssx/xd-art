@@ -766,7 +766,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::float_cmp)] // defaults are exact constants
     fn defaults_match_the_original_interface() {
         let s = Settings::default();
         assert_eq!(s.blur.radius, 0.0);

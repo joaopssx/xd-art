@@ -441,7 +441,6 @@ pub fn is_clear(p: Px, threshold: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::float_cmp)] // kernel values at exact points
     use super::*;
     use crate::buffer::to15;
 
