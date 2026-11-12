@@ -267,6 +267,146 @@ impl Matcher {
     }
 }
 
+/// Slots in a [`Cache`]. 4096 entries of 4 bytes stay in L1/L2 cache, and pixel art
+/// sources (already reduced, often flat) repeat colors a lot.
+const CACHE_SLOTS: usize = 4096;
+
+/// A small direct mapped cache in front of [`Matcher::closest`]. One per thread and per
+/// run; it is only valid for the matcher it was used with, so a palette or metric change
+/// means a new cache. Results are the same with or without it.
+#[derive(Clone, Debug)]
+pub struct Cache {
+    /// `rgb << 8 | index`, or `u32::MAX` for an empty slot.
+    slots: Vec<u32>,
+    /// Lookups answered from the cache.
+    pub hits: u64,
+    /// Lookups that had to search the palette.
+    pub misses: u64,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            slots: vec![u32::MAX; CACHE_SLOTS],
+            hits: 0,
+            misses: 0,
+        }
+    }
+}
+
+impl Cache {
+    /// [`Matcher::closest`], remembered.
+    #[inline]
+    pub fn closest(&mut self, m: &Matcher, c: [u8; 3]) -> u8 {
+        let key = u32::from(c[0]) << 16 | u32::from(c[1]) << 8 | u32::from(c[2]);
+        // Fibonacci hashing spreads neighbouring colors over the table.
+        let slot = (key.wrapping_mul(0x9e37_79b1) >> 20) as usize & (CACHE_SLOTS - 1);
+        let e = self.slots[slot];
+        if e != u32::MAX && e >> 8 == key {
+            self.hits += 1;
+            return e as u8;
+        }
+        self.misses += 1;
+        let i = m.closest(c);
+        self.slots[slot] = key << 8 | u32::from(i);
+        i
+    }
+}
+
+/// Cells per channel in a [`Lut`].
+const LUT_SIDE: usize = 32;
+/// Most candidates kept per cell.
+const LUT_CANDIDATES: usize = 8;
+
+/// A 32x32x32 table over RGB for fast approximate mapping, used by the live preview.
+///
+/// Each cell keeps the palette colors that are closest to its center or to one of its
+/// corners (up to eight). A lookup measures the exact distance to those candidates
+/// only. That is exact whenever the true answer is among them, which it is for nearly
+/// every color; the rate of misses is measured in `docs/performance.md`.
+#[derive(Clone, Debug)]
+pub struct Lut {
+    candidates: Vec<[u8; LUT_CANDIDATES]>,
+    counts: Vec<u8>,
+}
+
+impl Lut {
+    /// Builds the table: 9 exact queries per cell, 294,912 in total.
+    #[must_use]
+    pub fn new(m: &Matcher) -> Self {
+        let n = LUT_SIDE * LUT_SIDE * LUT_SIDE;
+        let mut candidates = vec![[0u8; LUT_CANDIDATES]; n];
+        let mut counts = vec![0u8; n];
+        let step = 256 / LUT_SIDE;
+        let corner = |i: usize, hi: bool| {
+            if hi {
+                (i * step + step - 1) as u8
+            } else {
+                (i * step) as u8
+            }
+        };
+        for r in 0..LUT_SIDE {
+            for g in 0..LUT_SIDE {
+                for b in 0..LUT_SIDE {
+                    let cell = (r * LUT_SIDE + g) * LUT_SIDE + b;
+                    let (cand, count) = (&mut candidates[cell], &mut counts[cell]);
+                    let mut push = |i: u8| {
+                        if !cand[..*count as usize].contains(&i)
+                            && (*count as usize) < LUT_CANDIDATES
+                        {
+                            cand[*count as usize] = i;
+                            *count += 1;
+                        }
+                    };
+                    let half = (step / 2) as u8;
+                    push(m.closest([
+                        corner(r, false) + half,
+                        corner(g, false) + half,
+                        corner(b, false) + half,
+                    ]));
+                    for k in 0..8 {
+                        push(m.closest([
+                            corner(r, k & 4 != 0),
+                            corner(g, k & 2 != 0),
+                            corner(b, k & 1 != 0),
+                        ]));
+                    }
+                }
+            }
+        }
+        Self { candidates, counts }
+    }
+
+    /// The closest palette color among the cell's candidates.
+    #[inline]
+    #[must_use]
+    pub fn closest(&self, m: &Matcher, c: [u8; 3]) -> u8 {
+        let s = 256 / LUT_SIDE;
+        let cell = (usize::from(c[0]) / s * LUT_SIDE + usize::from(c[1]) / s) * LUT_SIDE
+            + usize::from(c[2]) / s;
+        let n = self.counts[cell] as usize;
+        let cand = &self.candidates[cell][..n];
+        if n == 1 {
+            return cand[0];
+        }
+        let p = coords(m.metric, c);
+        let mut best = 1e12f32;
+        let mut idx = cand[0];
+        // Candidates are tried in palette order so ties resolve like the full search.
+        let mut order = [0u8; LUT_CANDIDATES];
+        order[..n].copy_from_slice(cand);
+        order[..n].sort_unstable();
+        for &i in &order[..n] {
+            let d = distance(m.metric, p, m.coords[i as usize]);
+            if d < best {
+                best = d;
+                idx = i;
+            }
+        }
+        idx
+    }
+}
+
 impl Metric {
     /// The metric to use while a slider is being dragged: the LAB metrics cost several
     /// times more per comparison, so the preview falls back to redmean until the slider
@@ -325,6 +465,49 @@ mod tests {
         assert!((t - 100.0 / 255.0).abs() < 1e-5);
         let single = Matcher::new(&[[5, 5, 5]], Metric::Rgb);
         assert_eq!(single.closest_two([0, 0, 0]), (0, 0, 0.0));
+    }
+
+    fn pseudo_colors(n: usize) -> Vec<[u8; 3]> {
+        let mut s = 12345u32;
+        (0..n)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                [s as u8, (s >> 8) as u8, (s >> 16) as u8]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cache_gives_the_same_answers() {
+        let pal = pseudo_colors(40);
+        for metric in Metric::ALL {
+            let m = Matcher::new(&pal, metric);
+            let mut c = Cache::default();
+            for col in pseudo_colors(3000).iter().chain(pseudo_colors(3000).iter()) {
+                assert_eq!(c.closest(&m, *col), m.closest(*col), "{metric:?}");
+            }
+            assert!(c.hits > 0 && c.misses > 0);
+        }
+    }
+
+    #[test]
+    fn lut_is_close_to_exact() {
+        let pal = pseudo_colors(24);
+        let m = Matcher::new(&pal, Metric::Redmean);
+        let lut = Lut::new(&m);
+        let colors = pseudo_colors(20_000);
+        let wrong = colors
+            .iter()
+            .filter(|c| lut.closest(&m, **c) != m.closest(**c))
+            .count();
+        // Over all 2^24 colors the table disagrees with the exact search on less than
+        // 0.005% for the built-in palettes (example `lut_error` in xd-art-bench).
+        assert!(wrong * 1000 < colors.len(), "{wrong} of {}", colors.len());
+        for &c in &pal {
+            assert_eq!(pal[lut.closest(&m, c) as usize], c);
+        }
     }
 
     #[test]

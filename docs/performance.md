@@ -87,3 +87,37 @@ the exact gaussian in 8-bit terms away from the edges, and at most 1 step off wi
 `3 sigma` of an edge, at radius 8 and 20. The first version clamped at the end of each
 of the three passes and was up to 21 steps off in the corners; extending the line once
 with its end pixels before the passes fixed that.
+
+## Closest color lookups
+
+```sh
+cargo run --release -p xd-art-bench --example lut_error
+```
+
+The 3D table (32 cells per channel, up to 8 candidate colors per cell, exact distance
+among the candidates) against the exact linear search, over all 16,777,216 RGB colors:
+
+| palette | metric | table build | colors that differ | worst extra distance |
+|---|---|---|---|---|
+| pico-8 | redmean | 10.9 ms | 788 (0.0047%) | 0.019 |
+| pico-8 | rgb | 11.1 ms | 447 (0.0027%) | 0.0065 |
+| console-32 | redmean | 20.4 ms | 624 (0.0037%) | 0.016 |
+| web-216 | redmean | 134 ms | 0 | 0 |
+| pico-8 | cie76 | 21.2 ms | 574 (0.0034%) | 90.9 |
+
+"Extra distance" is how much farther the color picked by the table is than the right
+one, in the metric's own units (RGB metrics on `0..1` channels, squared). For CIE76 the
+unit is squared LAB distance, so 90.9 is about 9.5 delta E: the table cells are cubes in
+RGB, which are not where LAB metrics draw their borders. That is fine for the preview
+while dragging, which uses a cheap RGB metric anyway, and never used for export.
+
+Per lookup, one thread, web-216 with redmean on a 1024x1024 synthetic photo:
+
+| method | time per pixel |
+|---|---|
+| exact linear search | 594 ns |
+| exact search behind the 4096 slot cache (25% hits on this noisy image) | 361 ns |
+| table | 5.9 ns |
+
+The cache helps in proportion to how often colors repeat. On a noisy photo that is one
+lookup in four; on an image that was already reduced and smoothed it is most of them.
