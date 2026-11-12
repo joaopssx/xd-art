@@ -113,6 +113,9 @@ pub struct Blur {
     pub radius: f32,
     /// Use the original program's 3-pass box blur instead of a true gaussian.
     pub box_approx: bool,
+    /// From this radius up, the gaussian is approximated with three running-sum box
+    /// passes, whose cost does not depend on the radius.
+    pub box_from: f32,
 }
 
 impl Default for Blur {
@@ -120,6 +123,7 @@ impl Default for Blur {
         Self {
             radius: 0.0,
             box_approx: false,
+            box_from: 5.0,
         }
     }
 }
@@ -665,6 +669,8 @@ impl Fingerprint for Blur {
         // Radius 0 is off whatever the mode, so both hash the same.
         if self.radius > 0.0 {
             h.f32(self.radius).u64(u64::from(self.box_approx));
+            // Only matters when it decides which implementation runs.
+            h.u64(u64::from(!self.box_approx && self.radius >= self.box_from));
         } else {
             h.u64(0);
         }

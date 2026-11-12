@@ -62,3 +62,28 @@ pixel under the filter contributes, weights normalized, edges clamped). The orig
 samples the filter at one point per output pixel, with `(size - 1) / size` steps and
 black outside the image. Those are two different results, not two speeds of the same
 result. See the decision in [decisions.md](decisions.md).
+
+## Blur
+
+```sh
+cargo bench -p xd-art-bench --bench blur -- --warm-up-time 1 --measurement-time 3
+```
+
+1920x1080 synthetic image, all cores.
+
+| radius | exact gaussian | running box (3 passes) | original box (compatible) |
+|---|---|---|---|
+| 2 | 6.92 ms | 11.3 ms | 11.5 ms |
+| 8 | 18.9 ms | 11.8 ms | 11.0 ms |
+| 32 | 66.3 ms | 11.6 ms | 10.9 ms |
+
+The gaussian grows with the kernel; both box versions do not. They cross between radius
+4 and 5, so the default `box_from` is 5: from there on the gaussian mode uses the running
+box passes.
+
+Accuracy of that switch, from the test `large_radius_approximation_is_close` on a
+160x120 noise image (noise is the worst case): the running box result is identical to
+the exact gaussian in 8-bit terms away from the edges, and at most 1 step off within
+`3 sigma` of an edge, at radius 8 and 20. The first version clamped at the end of each
+of the three passes and was up to 21 steps off in the corners; extending the line once
+with its end pixels before the passes fixed that.

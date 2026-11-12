@@ -3,7 +3,9 @@
 //! Two implementations:
 //!
 //! - A separable gaussian with a normalized kernel and clamped edges. The kernel for a
-//!   radius is built once and cached.
+//!   radius is built once and cached. From [`Blur::box_from`] up, three box passes with
+//!   running sums replace the kernel: their cost does not grow with the radius, and the
+//!   difference to the exact gaussian is small (measured in `docs/performance.md`).
 //! - The original program's blur: three passes of a box filter with a fractional radius,
 //!   in fixed point. Repeated box passes approach a gaussian, and its radius `r` gives the
 //!   same variance as a gaussian with `sigma = sqrt(r * (r + 1))`, which is the sigma the
@@ -74,6 +76,8 @@ pub fn blur(img: &mut Work, b: &Blur, pool: &Pool, cancel: &Cancel) -> Result<()
     }
     if b.box_approx {
         box_blur(img, b.radius, pool, cancel)
+    } else if b.radius >= b.box_from {
+        fast_gaussian(img, b.radius, pool, cancel)
     } else {
         gaussian(img, b.radius, pool, cancel)
     }
@@ -124,6 +128,90 @@ pub fn gaussian(img: &mut Work, radius: f32, pool: &Pool, cancel: &Cancel) -> Re
         }
     })?;
     pool.recycle_px(tmp);
+    Ok(())
+}
+
+/// Radii of three box filters whose combination has the variance of a gaussian with
+/// `sigma` (from Wells, "Efficient synthesis of Gaussian filters by cascaded uniform
+/// filters", 1986: the widths are the two odd integers around the ideal width).
+fn box_radii(sigma: f32) -> [usize; 3] {
+    let n = 3.0f32;
+    let ideal = (12.0 * sigma * sigma / n + 1.0).sqrt();
+    let mut lo = ideal.floor() as i32;
+    if lo % 2 == 0 {
+        lo -= 1;
+    }
+    let lo = lo.max(1);
+    let hi = lo + 2;
+    let lo_f = lo as f32;
+    let m = ((12.0 * sigma * sigma - n * lo_f * lo_f - 4.0 * n * lo_f - 3.0 * n)
+        / (-4.0 * lo_f - 4.0))
+        .round() as i32;
+    std::array::from_fn(|i| (if (i as i32) < m { lo } else { hi } as usize - 1) / 2)
+}
+
+/// One box pass with a running sum and clamped edges: `dst[x]` is the mean of
+/// `src[x - r ..= x + r]`.
+fn running_box(src: &[Px], dst: &mut [Px], r: usize) {
+    let n = src.len();
+    let at = |i: isize| src[i.clamp(0, n as isize - 1) as usize];
+    let d = (2 * r + 1) as u32;
+    let mut sum = [0u32; 4];
+    for i in -(r as isize)..=(r as isize) {
+        let p = at(i);
+        for c in 0..4 {
+            sum[c] += u32::from(p[c]);
+        }
+    }
+    for x in 0..n {
+        dst[x] = sum.map(|s| ((s + d / 2) / d) as u16);
+        let (add, sub) = (at(x as isize + r as isize + 1), at(x as isize - r as isize));
+        for c in 0..4 {
+            sum[c] = sum[c] + u32::from(add[c]) - u32::from(sub[c]);
+        }
+    }
+}
+
+/// Three box passes over a line. The line is first extended on both sides by
+/// repeating its end pixels as far as the three boxes reach, so the result is the box
+/// cascade applied to an edge-clamped signal, the same edge rule the exact gaussian
+/// uses. Clamping inside each pass instead would repeat the already blurred end pixel
+/// and pull the edges up to 20 levels away from the gaussian.
+fn three_boxes(line: &mut [Px], tmp: &mut (Vec<Px>, Vec<Px>), radii: [usize; 3]) {
+    let n = line.len();
+    let pad = radii.iter().sum::<usize>();
+    let (a, b) = tmp;
+    a.clear();
+    a.extend((0..n + 2 * pad).map(|i| line[i.saturating_sub(pad).min(n - 1)]));
+    b.clear();
+    b.resize(a.len(), [0; 4]);
+    running_box(a, b, radii[0]);
+    running_box(b, a, radii[1]);
+    running_box(a, b, radii[2]);
+    line.copy_from_slice(&b[pad..pad + n]);
+}
+
+/// Gaussian approximated by three box passes on rows and columns. Cost per pixel is the
+/// same for any radius.
+///
+/// # Errors
+///
+/// Fails when the run is cancelled.
+pub fn fast_gaussian(img: &mut Work, radius: f32, pool: &Pool, cancel: &Cancel) -> Result<()> {
+    let radii = box_radii(sigma_for(radius));
+    let (w, h) = (img.width as usize, img.height as usize);
+    let init = || (Vec::new(), Vec::new());
+    par::rows_with(&mut img.px, w, 6, cancel, init, |tmp, _, row| {
+        three_boxes(row, tmp, radii);
+    })?;
+    let mut t = pool.px(w * h);
+    t.resize(w * h, [0; 4]);
+    transpose(&img.px, &mut t, w, h);
+    par::rows_with(&mut t, h, 6, cancel, init, |tmp, _, row| {
+        three_boxes(row, tmp, radii);
+    })?;
+    transpose(&t, &mut img.px, h, w);
+    pool.recycle_px(t);
     Ok(())
 }
 
@@ -352,6 +440,7 @@ mod tests {
                 &Blur {
                     radius: 0.0,
                     box_approx,
+                    ..Blur::default()
                 },
                 &pool,
                 &Cancel::new(),
@@ -372,6 +461,7 @@ mod tests {
                 &Blur {
                     radius: 3.5,
                     box_approx,
+                    ..Blur::default()
                 },
                 &Pool::new(),
                 &Cancel::new(),
@@ -400,6 +490,7 @@ mod tests {
             let b = Blur {
                 radius: 2.5,
                 box_approx,
+                ..Blur::default()
             };
             let run = |t| {
                 par::with_threads(t, || {
@@ -410,6 +501,72 @@ mod tests {
             };
             assert_eq!(run(1), run(8));
         }
+    }
+
+    #[test]
+    fn box_radii_hit_the_variance() {
+        for sigma in [5.0f32, 11.3, 40.0] {
+            let r = box_radii(sigma);
+            let var: f32 = r
+                .iter()
+                .map(|&r| ((2 * r + 1).pow(2) - 1) as f32 / 12.0)
+                .sum();
+            assert!(
+                (var.sqrt() - sigma).abs() / sigma < 0.08,
+                "{sigma}: {r:?} -> {}",
+                var.sqrt()
+            );
+        }
+    }
+
+    #[test]
+    fn large_radius_approximation_is_close() {
+        let (w, h) = (160usize, 120usize);
+        let src = noise(w as u32, h as u32);
+        for radius in [8.0f32, 20.0] {
+            let mut exact = src.clone();
+            gaussian(&mut exact, radius, &Pool::new(), &Cancel::new()).unwrap();
+            let mut fast = src.clone();
+            fast_gaussian(&mut fast, radius, &Pool::new(), &Cancel::new()).unwrap();
+            let margin = (3.0 * sigma_for(radius)).ceil() as usize;
+            let (mut inner, mut edge) = (0u16, 0u16);
+            for (i, (a, b)) in exact.px.iter().zip(&fast.px).enumerate() {
+                let (x, y) = (i % w, i / w);
+                let d = (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0);
+                if x >= margin && y >= margin && x + margin < w && y + margin < h {
+                    inner = inner.max(d);
+                } else {
+                    edge = edge.max(d);
+                }
+            }
+            // In 8-bit steps. Measured: 0 inside, at most 1 at the edges.
+            assert!(
+                inner >> 7 <= 1 && edge >> 7 <= 1,
+                "radius {radius}: {inner} {edge}"
+            );
+        }
+    }
+
+    #[test]
+    fn threshold_picks_the_implementation() {
+        let src = noise(60, 40);
+        let b = Blur {
+            radius: 9.0,
+            box_approx: false,
+            box_from: 8.0,
+        };
+        let mut a = src.clone();
+        blur(&mut a, &b, &Pool::new(), &Cancel::new()).unwrap();
+        let mut f = src.clone();
+        fast_gaussian(&mut f, 9.0, &Pool::new(), &Cancel::new()).unwrap();
+        assert_eq!(a, f);
+        let b = Blur {
+            box_from: 100.0,
+            ..b
+        };
+        let mut g = src.clone();
+        blur(&mut g, &b, &Pool::new(), &Cancel::new()).unwrap();
+        assert_ne!(g, f);
     }
 
     #[test]

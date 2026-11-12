@@ -21,5 +21,9 @@ fast_image_resize = "6.1.0"
 name = "resize"
 harness = false
 
+[[bench]]
+name = "blur"
+harness = false
+
 [lints]
 workspace = true
