@@ -143,3 +143,26 @@ Lanczos commit, since that is where the golden test caught it.
 Lanczos weights are also not normalized in the original. A flat area comes out about 1%
 darker. xd-art keeps that, because changing it would break every comparison with the
 original; see [compat.md](compat.md).
+
+## 2026-11-12: no fast_image_resize in the engine
+
+I measured `fast_image_resize` 6.1 against the ported filters (numbers in
+[performance.md](performance.md)). Its bilinear, Catmull-Rom and Lanczos results differ
+from the original's by up to 28 levels per channel on more than 75% of channels, because
+it convolves over the whole footprint while the original point samples. Accepting that
+would break compatibility, which is the point of those modes. Its box filter is within
+one level of xd-art's own, but after parallelizing, xd-art's box is in the same range
+(203 µs against 134 µs for a 1920x1080 to 160x90 reduction), not worth a dependency.
+
+The crate stays as a dev-dependency of `xd-art-bench`, only to keep that comparison
+reproducible.
+
+## 2026-11-12: rayon for rows, no explicit SIMD
+
+`rayon` (optional, `parallel` feature, on by default) runs independent rows on all cores.
+Results do not depend on the thread count: every row is computed by the same code, and a
+test compares one thread against eight for every sampling mode.
+
+I did not add intrinsics. Writing the channel math on `[f32; 4]` gets vector instructions
+from the compiler with no `unsafe`, and keeps the exact `f32` rounding of the scalar code.
+So there is no `unsafe` module to run under Miri yet.

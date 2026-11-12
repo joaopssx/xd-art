@@ -8,11 +8,18 @@
 //! - interpolating filters treat pixels outside the image as opaque black instead of
 //!   clamping to the edge, which darkens the last row and column a little.
 //!
-//! Matching both is what makes the golden tests pass. Every function works one output
-//! row at a time so rows can run in parallel.
+//! Matching both is what makes the golden tests pass.
+//!
+//! Speed comes from three things. Rows are independent and run in parallel
+//! ([`crate::par`]). Everything that only depends on the column (source position,
+//! fraction, Lanczos weights) is computed once per image instead of once per pixel. And
+//! the four channels are processed as `[f32; 4]` with the same sequence of operations
+//! as the scalar code, which the compiler turns into SSE instructions without changing
+//! the result of a single channel.
 
 use crate::buffer::{MAX15, Px, Work, to8, to15};
 use crate::cancel::Cancel;
+use crate::par;
 use crate::pool::Pool;
 use crate::quant::{self, Scratch};
 use crate::settings::{Sample, SampleMode};
@@ -20,6 +27,28 @@ use crate::{Error, Result};
 
 /// What the original uses for pixels outside the image: black with full alpha.
 const OUTSIDE: Px = [0, 0, 0, MAX15];
+
+type V4 = [f32; 4];
+
+#[inline]
+fn v4(p: Px) -> V4 {
+    p.map(f32::from)
+}
+
+#[inline]
+fn mul(a: V4, k: f32) -> V4 {
+    a.map(|v| v * k)
+}
+
+#[inline]
+fn add(a: V4, b: V4) -> V4 {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]]
+}
+
+#[inline]
+fn sub(a: V4, b: V4) -> V4 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]]
+}
 
 /// Where output pixels land in the source.
 #[derive(Clone, Copy, Debug)]
@@ -53,6 +82,32 @@ impl Grid {
     }
 }
 
+/// Per column values, computed once per image.
+#[derive(Debug, Default)]
+struct Cols {
+    /// Source column of the sample, truncated like a C `(int)` cast.
+    ix: Vec<i32>,
+    /// Fraction between `ix` and the next column.
+    fx: Vec<f32>,
+    /// Lanczos weights, only filled for Lanczos.
+    lw: Vec<[f32; 6]>,
+}
+
+impl Cols {
+    fn new(g: &Grid, w: u32, lanczos: bool) -> Self {
+        let mut c = Cols::default();
+        for x in 0..w {
+            let (i, f) = split(g.x(x));
+            c.ix.push(i);
+            c.fx.push(f);
+            if lanczos {
+                c.lw.push(lanczos_weights(f));
+            }
+        }
+        c
+    }
+}
+
 /// Integer part toward zero and the remainder, like a C `(int)` cast.
 #[inline]
 fn split(v: f32) -> (i32, f32) {
@@ -63,9 +118,21 @@ fn split(v: f32) -> (i32, f32) {
 #[inline]
 fn fetch(src: &Work, x: i32, y: i32) -> Px {
     if x >= 0 && y >= 0 && (x as u32) < src.width && (y as u32) < src.height {
-        src.at(x as u32, y as u32)
+        src.px[y as usize * src.width as usize + x as usize]
     } else {
         OUTSIDE
+    }
+}
+
+/// `n` pixels of row `y` starting at column `x`, with [`OUTSIDE`] for pixels off the
+/// image. Takes the fast path when the whole span is inside.
+#[inline]
+fn span<const N: usize>(src: &Work, x: i32, y: i32) -> [Px; N] {
+    if y >= 0 && (y as u32) < src.height && x >= 0 && (x as usize + N) <= src.width as usize {
+        let start = y as usize * src.width as usize + x as usize;
+        src.px[start..start + N].try_into().unwrap_or([OUTSIDE; N])
+    } else {
+        std::array::from_fn(|i| fetch(src, x + i as i32, y))
     }
 }
 
@@ -75,7 +142,12 @@ fn store(v: f32) -> u16 {
     (v as i32).clamp(0, i32::from(MAX15)) as u16
 }
 
-fn row_nearest(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
+#[inline]
+fn store4(v: V4) -> Px {
+    v.map(store)
+}
+
+fn row_nearest(src: &Work, g: &Grid, _: &Cols, y: u32, out: &mut [Px]) {
     let iy = (g.y(y).round() as i32).clamp(0, src.height as i32 - 1) as u32;
     let row = src.row(iy);
     let max_x = src.width as i32 - 1;
@@ -85,55 +157,62 @@ fn row_nearest(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
     }
 }
 
+/// Same operations as the original's `(1 - s) * a + s * b`, four channels at once.
 #[inline]
-fn lerp2(sx: f32, sy: f32, c: [f32; 4]) -> f32 {
-    let t0 = (1.0 - sx) * c[0] + sx * c[1];
-    let t1 = (1.0 - sx) * c[2] + sx * c[3];
-    (1.0 - sy) * t0 + sy * t1
+fn lerp(a: V4, b: V4, s: f32) -> V4 {
+    add(mul(a, 1.0 - s), mul(b, s))
 }
 
-fn row_bilinear(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
+fn row_bilinear(src: &Work, g: &Grid, cols: &Cols, y: u32, out: &mut [Px]) {
     let (iy, sy) = split(g.y(y));
     for (x, o) in out.iter_mut().enumerate() {
-        let (ix, sx) = split(g.x(x as u32));
-        let p = [
-            fetch(src, ix, iy),
-            fetch(src, ix + 1, iy),
-            fetch(src, ix, iy + 1),
-            fetch(src, ix + 1, iy + 1),
-        ];
-        for c in 0..4 {
-            let v = [p[0][c], p[1][c], p[2][c], p[3][c]].map(f32::from);
-            o[c] = store(lerp2(sx, sy, v));
-        }
+        let (ix, sx) = (cols.ix[x], cols.fx[x]);
+        let top: [Px; 2] = span(src, ix, iy);
+        let bottom: [Px; 2] = span(src, ix, iy + 1);
+        let t0 = lerp(v4(top[0]), v4(top[1]), sx);
+        let t1 = lerp(v4(bottom[0]), v4(bottom[1]), sx);
+        *o = store4(lerp(t0, t1, sy));
     }
 }
 
-#[inline]
+#[cfg(test)]
 fn cubic(c: [f32; 4], t: f32) -> f32 {
-    // Catmull-Rom (a = -0.5), written in the same order as the original so the f32
-    // rounding comes out the same.
-    let a0 = -0.5 * c[0] + 1.5 * c[1] - 1.5 * c[2] + 0.5 * c[3];
-    let a1 = c[0] - 2.5 * c[1] + 2.0 * c[2] - 0.5 * c[3];
-    let a2 = -0.5 * c[0] + 0.5 * c[2];
-    let a3 = c[1];
-    a0 * t * t * t + a1 * t * t + a2 * t + a3
+    let r = cubic4(c.map(|v| [v; 4]), t);
+    r[0]
 }
 
-fn row_bicubic(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
+/// Catmull-Rom (a = -0.5), written in the same order as the original so the f32
+/// rounding comes out the same.
+#[inline]
+fn cubic4(c: [V4; 4], t: f32) -> V4 {
+    let a0 = add(
+        sub(add(mul(c[0], -0.5), mul(c[1], 1.5)), mul(c[2], 1.5)),
+        mul(c[3], 0.5),
+    );
+    let a1 = sub(
+        add(sub(c[0], mul(c[1], 2.5)), mul(c[2], 2.0)),
+        mul(c[3], 0.5),
+    );
+    let a2 = add(mul(c[0], -0.5), mul(c[2], 0.5));
+    let a3 = c[1];
+    add(
+        add(
+            add(mul(mul(mul(a0, t), t), t), mul(mul(a1, t), t)),
+            mul(a2, t),
+        ),
+        a3,
+    )
+}
+
+fn row_bicubic(src: &Work, g: &Grid, cols: &Cols, y: u32, out: &mut [Px]) {
     let (iy, sy) = split(g.y(y));
     for (x, o) in out.iter_mut().enumerate() {
-        let (ix, sx) = split(g.x(x as u32));
-        let mut p = [[OUTSIDE; 4]; 4];
-        for (r, row) in p.iter_mut().enumerate() {
-            for (c, px) in row.iter_mut().enumerate() {
-                *px = fetch(src, ix - 1 + c as i32, iy - 1 + r as i32);
-            }
-        }
-        for ch in 0..4 {
-            let rows = p.map(|row| cubic(row.map(|px| f32::from(px[ch])), sx));
-            o[ch] = store(cubic(rows, sy));
-        }
+        let (ix, sx) = (cols.ix[x], cols.fx[x]);
+        let rows: [V4; 4] = std::array::from_fn(|r| {
+            let p: [Px; 4] = span(src, ix - 1, iy - 1 + r as i32);
+            cubic4(p.map(v4), sx)
+        });
+        *o = store4(cubic4(rows, sy));
     }
 }
 
@@ -151,35 +230,38 @@ fn lanczos3(v: f32) -> f32 {
     (3.0 * (PI * v).sin() * (PI * v / 3.0).sin()) / (PI * PI * v * v)
 }
 
-#[inline]
-fn dot6(w: &[f32; 6], v: [f32; 6]) -> f32 {
-    w[0] * v[0] + w[1] * v[1] + w[2] * v[2] + w[3] * v[3] + w[4] * v[4] + w[5] * v[5]
+fn lanczos_weights(s: f32) -> [f32; 6] {
+    [s + 2.0, s + 1.0, s, s - 1.0, s - 2.0, s - 3.0].map(lanczos3)
 }
 
-fn row_lanczos(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
+/// `w[0] * v[0] + ... + w[5] * v[5]`, summed left to right like the original.
+#[inline]
+fn dot6(w: &[f32; 6], v: &[V4; 6]) -> V4 {
+    let mut acc = mul(v[0], w[0]);
+    for i in 1..6 {
+        acc = add(acc, mul(v[i], w[i]));
+    }
+    acc
+}
+
+fn row_lanczos(src: &Work, g: &Grid, cols: &Cols, y: u32, out: &mut [Px]) {
     let (iy, sy) = split(g.y(y));
-    let wy = [sy + 2.0, sy + 1.0, sy, sy - 1.0, sy - 2.0, sy - 3.0].map(lanczos3);
+    let wy = lanczos_weights(sy);
     for (x, o) in out.iter_mut().enumerate() {
-        let (ix, sx) = split(g.x(x as u32));
-        let wx = [sx + 2.0, sx + 1.0, sx, sx - 1.0, sx - 2.0, sx - 3.0].map(lanczos3);
-        let mut acc = [[0.0f32; 6]; 4];
-        for i in 0..6 {
-            let row: [Px; 6] =
-                std::array::from_fn(|c| fetch(src, ix - 2 + c as i32, iy - 2 + i as i32));
-            for (ch, a) in acc.iter_mut().enumerate() {
-                a[i] = dot6(&wx, row.map(|px| f32::from(px[ch])));
-            }
-        }
-        for ch in 0..4 {
-            o[ch] = store(dot6(&wy, acc[ch]));
-        }
+        let ix = cols.ix[x];
+        let wx = &cols.lw[x];
+        let acc: [V4; 6] = std::array::from_fn(|i| {
+            let row: [Px; 6] = span(src, ix - 2, iy - 2 + i as i32);
+            dot6(wx, &row.map(v4))
+        });
+        *o = store4(dot6(&wy, &acc));
     }
 }
 
 /// Averages every source pixel whose top left corner falls inside the output pixel.
 /// Not in the original. It is what most people expect from "downscale" and the base of
 /// the edge-preserving mode.
-fn row_box(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
+fn row_box(src: &Work, g: &Grid, _: &Cols, y: u32, out: &mut [Px]) {
     let w = out.len() as f32;
     let fx = src.width as f32 / w;
     let fy = src.height as f32 / g.rows as f32;
@@ -205,7 +287,7 @@ fn row_box(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
 }
 
 /// Fills one output row.
-type RowFn = fn(&Work, &Grid, u32, &mut [Px]);
+type RowFn = fn(&Work, &Grid, &Cols, u32, &mut [Px]);
 
 fn row_fn(mode: SampleMode) -> RowFn {
     match mode {
@@ -232,47 +314,54 @@ fn cluster(
     let grid_x = src.width as f32 / w as f32;
     let grid_y = src.height as f32 / h as f32;
     let (gw, gh) = (grid_x as u32, grid_y as u32);
-    let near = Grid::new(src, w, h, off.0, off.1);
     if gw == 0 || gh == 0 {
-        for (y, line) in out.px.chunks_exact_mut(w as usize).enumerate() {
-            cancel.check()?;
-            row_nearest(src, &near, y as u32, line);
-        }
-        return Ok(());
+        let near = Grid::new(src, w, h, off.0, off.1);
+        let cols = Cols::default();
+        return par::rows(&mut out.px, w as usize, 1, cancel, |y, line| {
+            row_nearest(src, &near, &cols, y as u32, line);
+        });
     }
-    let mut block = Vec::with_capacity((gw * gh) as usize);
-    let mut scratch = Scratch::default();
     let max_x = src.width as i32 - 1;
     let max_y = src.height as i32 - 1;
-    for (y, line) in out.px.chunks_exact_mut(w as usize).enumerate() {
-        cancel.check()?;
-        let fy = y as f32;
-        // Alpha uses a nearest pick with step source / target, unlike row_nearest.
-        let iy = (((fy + off.1 + 0.5) * grid_y).round() as i32).clamp(0, max_y) as u32;
-        for (x, o) in line.iter_mut().enumerate() {
-            let fx = x as f32;
-            let ix = (((fx + off.0 + 0.5) * grid_x).round() as i32).clamp(0, max_x) as u32;
-            let alpha = src.at(ix, iy)[3];
-            block.clear();
-            for gy in 0..gh {
-                for gx in 0..gw {
-                    let sx = fx * grid_x + gx as f32;
-                    let sy = fy * grid_y + gy as f32;
-                    let inside =
-                        sx >= 0.0 && sx < src.width as f32 && sy >= 0.0 && sy < src.height as f32;
-                    block.push(if inside {
-                        let p = src.at((fx * grid_x) as u32 + gx, (fy * grid_y) as u32 + gy);
-                        [to8(p[0]), to8(p[1]), to8(p[2])]
-                    } else {
-                        [0; 3]
-                    });
+    let init = || (Vec::with_capacity((gw * gh) as usize), Scratch::default());
+    // k-means does 3 distance checks per pixel and pass, 8 passes, plus seeding.
+    let cost = (gw * gh) as usize * 30;
+    par::rows_with(
+        &mut out.px,
+        w as usize,
+        cost,
+        cancel,
+        init,
+        |(block, scratch), y, line| {
+            let fy = y as f32;
+            // Alpha uses a nearest pick with step source / target, unlike row_nearest.
+            let iy = (((fy + off.1 + 0.5) * grid_y).round() as i32).clamp(0, max_y) as u32;
+            for (x, o) in line.iter_mut().enumerate() {
+                let fx = x as f32;
+                let ix = (((fx + off.0 + 0.5) * grid_x).round() as i32).clamp(0, max_x) as u32;
+                let alpha = src.at(ix, iy)[3];
+                block.clear();
+                for gy in 0..gh {
+                    for gx in 0..gw {
+                        let sx = fx * grid_x + gx as f32;
+                        let sy = fy * grid_y + gy as f32;
+                        let inside = sx >= 0.0
+                            && sx < src.width as f32
+                            && sy >= 0.0
+                            && sy < src.height as f32;
+                        block.push(if inside {
+                            let p = src.at((fx * grid_x) as u32 + gx, (fy * grid_y) as u32 + gy);
+                            [to8(p[0]), to8(p[1]), to8(p[2])]
+                        } else {
+                            [0; 3]
+                        });
+                    }
                 }
+                let c = quant::largest_cluster(block, 3, 0xdead_beef, scratch);
+                *o = [to15(c[0]), to15(c[1]), to15(c[2]), alpha];
             }
-            let c = quant::largest_cluster(&block, 3, 0xdead_beef, &mut scratch);
-            *o = [to15(c[0]), to15(c[1]), to15(c[2]), alpha];
-        }
-    }
-    Ok(())
+        },
+    )
 }
 
 /// Samples `src` to `w` x `h` with the given offsets (in output pixels).
@@ -303,10 +392,22 @@ pub fn sample(
     }
     let row = row_fn(mode);
     let grid = Grid::new(src, w, h, offset.0, offset.1);
-    for (y, line) in out.px.chunks_exact_mut(w as usize).enumerate() {
-        cancel.check()?;
-        row(src, &grid, y as u32, line);
-    }
+    let cols = match mode {
+        SampleMode::Bilinear | SampleMode::Bicubic | SampleMode::Lanczos => {
+            Cols::new(&grid, w, mode == SampleMode::Lanczos)
+        }
+        _ => Cols::default(),
+    };
+    let cost = match mode {
+        SampleMode::Nearest | SampleMode::Cluster => 1,
+        SampleMode::Bilinear => 4,
+        SampleMode::Bicubic => 16,
+        SampleMode::Lanczos => 36,
+        SampleMode::Box => (src.width / w).max(1) as usize * (src.height / h).max(1) as usize,
+    };
+    par::rows(&mut out.px, w as usize, cost, cancel, |y, line| {
+        row(src, &grid, &cols, y as u32, line);
+    })?;
     Ok(out)
 }
 
@@ -505,6 +606,28 @@ mod tests {
         assert!(!is_clear([0, 0, 0, 0], 0));
         assert!(is_clear([0, 0, 0, to15(255) - 1], 255));
         assert!(!is_clear([0, 0, 0, to15(255)], 255));
+    }
+
+    #[test]
+    fn one_thread_and_many_agree() {
+        let mut src = Work::new(300, 200, [0; 4]).unwrap();
+        let mut seed = 7u32;
+        for p in &mut src.px {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            *p = [
+                (seed & 0x7fff) as u16,
+                (seed >> 8 & 0x7fff) as u16,
+                (seed >> 16 & 0x7fff) as u16,
+                MAX15,
+            ];
+        }
+        for mode in SampleMode::ALL {
+            let one = par::with_threads(1, || run(&src, 97, 61, mode));
+            let many = par::with_threads(8, || run(&src, 97, 61, mode));
+            assert_eq!(one, many, "{mode:?}");
+        }
     }
 
     #[test]

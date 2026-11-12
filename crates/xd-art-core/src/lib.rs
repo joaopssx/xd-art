@@ -32,6 +32,7 @@ pub mod error;
 pub mod export;
 pub mod io;
 pub mod palette;
+pub mod par;
 pub mod pipeline;
 pub mod pool;
 pub mod post;

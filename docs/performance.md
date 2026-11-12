@@ -1,0 +1,64 @@
+# Performance
+
+Numbers here are measured, with the command next to them. Unless a section says
+otherwise, the machine is Windows 11 Pro, AMD Ryzen 9 7950X (16 cores, 32 threads),
+32 GB RAM, rustc 1.95.0, release profile from the workspace `Cargo.toml`.
+
+Criterion reports a range; the tables show its middle value.
+
+## Sampling
+
+```sh
+cargo bench -p xd-art-bench --bench resize -- --warm-up-time 1 --measurement-time 2 sample
+```
+
+Input is a synthetic 1920x1080 image (`xd_art_bench::photo_like`).
+
+| mode | 160x90, first port | 160x90, now | 960x540, first port | 960x540, now |
+|---|---|---|---|---|
+| nearest | 29.2 µs | 29.7 µs | | |
+| bilinear | 162 µs | 145 µs | 5.76 ms | 0.78 ms |
+| bicubic | 1.04 ms | 0.25 ms | | |
+| lanczos | 1.92 ms | 0.19 ms | 68.0 ms | 1.66 ms |
+| box | 1.10 ms | 0.20 ms | | |
+| cluster | 69.3 ms | 4.86 ms | | |
+
+"First port" is the straight translation of the original's loops, one thread. "Now" is
+the same math with three changes:
+
+- Rows run in parallel with rayon, in groups sized by how much work a pixel is (a
+  Lanczos sample reads 36 source pixels, a nearest sample one), so a 160x90 nearest
+  resize stays on one thread and a 160x90 cluster resize uses all of them.
+- Values that only depend on the column (source position, fraction, the six Lanczos
+  weights with their `sin` calls) are computed once per image instead of once per
+  pixel. That alone is most of the Lanczos gain.
+- The four channels go through the filters as `[f32; 4]`, with the same operations in
+  the same order as the scalar code. LLVM turns those into SSE instructions. Each
+  channel still sees the exact sequence of `f32` roundings it had before, so the golden
+  tests did not move.
+
+There is no hand written SIMD and no `unsafe` in the sampling code. I tried to find a
+place where intrinsics would pay off and the remaining time is in memory access (the
+source of a 1920x1080 image in the working format is 16 MB), not arithmetic.
+
+### fast_image_resize
+
+```sh
+cargo run --release -p xd-art-bench --example fir_diff
+```
+
+| filter | max diff 160x90 | channels off by more than 1 | max diff 960x540 | channels off by more than 1 |
+|---|---|---|---|---|
+| bilinear | 16 | 82.4% | 20 | 75.7% |
+| bicubic | 20 | 85.9% | 23 | 80.8% |
+| lanczos | 28 | 87.2% | 26 | 83.4% |
+| box | 1 | 0.0% | 1 | 0.0% |
+
+Time for the same 160x90 reduction (same bench command): bilinear 247 µs, bicubic
+452 µs, lanczos 864 µs, box 134 µs.
+
+The difference is expected: `fast_image_resize` does proper convolution (every source
+pixel under the filter contributes, weights normalized, edges clamped). The original
+samples the filter at one point per output pixel, with `(size - 1) / size` steps and
+black outside the image. Those are two different results, not two speeds of the same
+result. See the decision in [decisions.md](decisions.md).
