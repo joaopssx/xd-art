@@ -8,6 +8,18 @@
 //! the palette (with or without dithering), then post-process.
 
 #![warn(clippy::pedantic)]
+// Pixel code converts between u8, u16, i32 and f32 all the time, always on values whose
+// range is known (channels, coordinates of images that already fit in memory). Spelling
+// each one with try_from would hide the math.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless
+)]
+// x, y, r, g, b, a are the natural names in image code.
+#![allow(clippy::many_single_char_names, clippy::similar_names)]
 
 pub mod anim;
 pub mod buffer;
