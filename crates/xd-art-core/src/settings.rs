@@ -707,22 +707,28 @@ impl Fingerprint for Adjust {
     }
 }
 
-impl Fingerprint for Colors {
+impl Fingerprint for PaletteSource {
     fn feed(&self, h: &mut Fnv) {
-        match &self.palette {
-            PaletteSource::Builtin(name) => {
+        match self {
+            Self::Builtin(name) => {
                 h.u64(0).str(name);
             }
-            PaletteSource::Colors(c) => {
+            Self::Colors(c) => {
                 h.u64(1).u64(c.len() as u64);
                 for rgb in c {
                     h.bytes(rgb);
                 }
             }
-            PaletteSource::Extract { count, method } => {
+            Self::Extract { count, method } => {
                 h.u64(2).u64(u64::from(*count)).u64(*method as u64);
             }
         }
+    }
+}
+
+impl Fingerprint for Colors {
+    fn feed(&self, h: &mut Fnv) {
+        self.palette.feed(h);
         h.str(self.metric.name());
     }
 }

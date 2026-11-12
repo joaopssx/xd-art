@@ -106,3 +106,16 @@ colors are a published spec of the console. More on palette sources in
 
 Fingerprints use FNV-1a instead of `std`'s hasher, because they must be the same on every
 run and every platform (they end up in recipes and in the CI speed check).
+
+## 2026-11-12: stage order follows the original
+
+My first plan had all preparation (blur, sharpen, color adjustments, tint) before
+sampling. The original does something smarter: only the blur runs on the full size
+source, because its job is to remove detail before sampling. Sharpen and the color
+adjustments run on the already small image, where they cost almost nothing. xd-art keeps
+that order, which is also what makes its results comparable with the original's.
+
+The pipeline caches the current result of every stage plus up to three older ones per
+stage (256 MB total, nothing above 64 MB per result). The older ones exist for the
+common "flip between two options" comparison. Large intermediates, mostly a blurred full
+size photo, are not kept because recomputing them is cheaper than holding several.
