@@ -84,3 +84,8 @@ fn sampling_bicubic() {
 fn sampling_lanczos() {
     check_sampling(SampleMode::Lanczos, FLOAT_TOL);
 }
+
+#[test]
+fn sampling_cluster() {
+    check_sampling(SampleMode::Cluster, 0);
+}

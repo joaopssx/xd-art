@@ -20,6 +20,8 @@
 )]
 // x, y, r, g, b, a are the natural names in image code.
 #![allow(clippy::many_single_char_names, clippy::similar_names)]
+// Channel loops index two or three arrays with the same `c`; iterators make that worse.
+#![allow(clippy::needless_range_loop)]
 
 pub mod anim;
 pub mod buffer;

@@ -11,9 +11,10 @@
 //! Matching both is what makes the golden tests pass. Every function works one output
 //! row at a time so rows can run in parallel.
 
-use crate::buffer::{MAX15, Px, Work};
+use crate::buffer::{MAX15, Px, Work, to8, to15};
 use crate::cancel::Cancel;
 use crate::pool::Pool;
+use crate::quant::{self, Scratch};
 use crate::settings::SampleMode;
 use crate::{Error, Result};
 
@@ -27,6 +28,7 @@ struct Grid {
     step_y: f32,
     off_x: f32,
     off_y: f32,
+    rows: u32,
 }
 
 impl Grid {
@@ -36,6 +38,7 @@ impl Grid {
             step_y: (src.height as f32 - 1.0) / h as f32,
             off_x,
             off_y,
+            rows: h,
         }
     }
 
@@ -173,20 +176,103 @@ fn row_lanczos(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
     }
 }
 
+/// Averages every source pixel whose top left corner falls inside the output pixel.
+/// Not in the original. It is what most people expect from "downscale" and the base of
+/// the edge-preserving mode.
+fn row_box(src: &Work, g: &Grid, y: u32, out: &mut [Px]) {
+    let w = out.len() as f32;
+    let fx = src.width as f32 / w;
+    let fy = src.height as f32 / g.rows as f32;
+    let span = |start: f32, step: f32, len: u32| {
+        let a = (start.floor().max(0.0) as u32).min(len - 1);
+        let b = ((start + step).ceil().max(0.0) as u32).clamp(a + 1, len);
+        (a, b)
+    };
+    let (y0, y1) = span((y as f32 + g.off_y) * fy, fy, src.height);
+    for (x, o) in out.iter_mut().enumerate() {
+        let (x0, x1) = span((x as f32 + g.off_x) * fx, fx, src.width);
+        let mut sum = [0u64; 4];
+        for sy in y0..y1 {
+            for p in &src.row(sy)[x0 as usize..x1 as usize] {
+                for c in 0..4 {
+                    sum[c] += u64::from(p[c]);
+                }
+            }
+        }
+        let n = u64::from((x1 - x0) * (y1 - y0));
+        *o = sum.map(|s| ((s + n / 2) / n) as u16);
+    }
+}
+
 /// Fills one output row.
 type RowFn = fn(&Work, &Grid, u32, &mut [Px]);
 
-fn row_fn(mode: SampleMode) -> Result<RowFn> {
+fn row_fn(mode: SampleMode) -> RowFn {
     match mode {
-        SampleMode::Nearest => Ok(row_nearest),
-        SampleMode::Bilinear => Ok(row_bilinear),
-        SampleMode::Bicubic => Ok(row_bicubic),
-        SampleMode::Lanczos => Ok(row_lanczos),
-        other => Err(Error::Unsupported(format!(
-            "sampling mode {}",
-            other.name()
-        ))),
+        SampleMode::Nearest | SampleMode::Cluster => row_nearest,
+        SampleMode::Bilinear => row_bilinear,
+        SampleMode::Bicubic => row_bicubic,
+        SampleMode::Lanczos => row_lanczos,
+        SampleMode::Box => row_box,
     }
+}
+
+/// Cluster sampling, as in the original: for every output pixel, take the block of
+/// source pixels it covers, run a 3-color k-means on it and keep the center of the
+/// biggest cluster. Alpha comes from the nearest pixel. Falls back to nearest when the
+/// output is larger than the source.
+fn cluster(
+    src: &Work,
+    w: u32,
+    h: u32,
+    off: (f32, f32),
+    out: &mut Work,
+    cancel: &Cancel,
+) -> Result<()> {
+    let grid_x = src.width as f32 / w as f32;
+    let grid_y = src.height as f32 / h as f32;
+    let (gw, gh) = (grid_x as u32, grid_y as u32);
+    let near = Grid::new(src, w, h, off.0, off.1);
+    if gw == 0 || gh == 0 {
+        for (y, line) in out.px.chunks_exact_mut(w as usize).enumerate() {
+            cancel.check()?;
+            row_nearest(src, &near, y as u32, line);
+        }
+        return Ok(());
+    }
+    let mut block = Vec::with_capacity((gw * gh) as usize);
+    let mut scratch = Scratch::default();
+    let max_x = src.width as i32 - 1;
+    let max_y = src.height as i32 - 1;
+    for (y, line) in out.px.chunks_exact_mut(w as usize).enumerate() {
+        cancel.check()?;
+        let fy = y as f32;
+        // Alpha uses a nearest pick with step source / target, unlike row_nearest.
+        let iy = (((fy + off.1 + 0.5) * grid_y).round() as i32).clamp(0, max_y) as u32;
+        for (x, o) in line.iter_mut().enumerate() {
+            let fx = x as f32;
+            let ix = (((fx + off.0 + 0.5) * grid_x).round() as i32).clamp(0, max_x) as u32;
+            let alpha = src.at(ix, iy)[3];
+            block.clear();
+            for gy in 0..gh {
+                for gx in 0..gw {
+                    let sx = fx * grid_x + gx as f32;
+                    let sy = fy * grid_y + gy as f32;
+                    let inside =
+                        sx >= 0.0 && sx < src.width as f32 && sy >= 0.0 && sy < src.height as f32;
+                    block.push(if inside {
+                        let p = src.at((fx * grid_x) as u32 + gx, (fy * grid_y) as u32 + gy);
+                        [to8(p[0]), to8(p[1]), to8(p[2])]
+                    } else {
+                        [0; 3]
+                    });
+                }
+            }
+            let c = quant::largest_cluster(&block, 3, 0xdead_beef, &mut scratch);
+            *o = [to15(c[0]), to15(c[1]), to15(c[2]), alpha];
+        }
+    }
+    Ok(())
 }
 
 /// Samples `src` to `w` x `h` with the given offsets (in output pixels).
@@ -210,9 +296,13 @@ pub fn sample(
         });
     }
     let (w, h) = (w.max(1), h.max(1));
-    let row = row_fn(mode)?;
-    let grid = Grid::new(src, w, h, offset.0, offset.1);
     let mut out = pool.work(w, h, OUTSIDE);
+    if mode == SampleMode::Cluster {
+        cluster(src, w, h, offset, &mut out, cancel)?;
+        return Ok(out);
+    }
+    let row = row_fn(mode);
+    let grid = Grid::new(src, w, h, offset.0, offset.1);
     for (y, line) in out.px.chunks_exact_mut(w as usize).enumerate() {
         cancel.check()?;
         row(src, &grid, y as u32, line);
@@ -253,12 +343,7 @@ mod tests {
     #[test]
     fn single_pixel_source() {
         let src = Work::new(1, 1, [100, 200, 300, MAX15]).unwrap();
-        for mode in [
-            SampleMode::Nearest,
-            SampleMode::Bilinear,
-            SampleMode::Bicubic,
-            SampleMode::Lanczos,
-        ] {
+        for mode in SampleMode::ALL {
             let out = run(&src, 3, 2, mode);
             assert_eq!(out.width, 3);
             assert_eq!(out.px[0][3], MAX15, "{mode:?}");
@@ -308,6 +393,31 @@ mod tests {
             let want = f32::from(src.px[0][c]);
             assert!((f32::from(p[c]) - want).abs() / want < 0.02, "{p:?}");
         }
+    }
+
+    #[test]
+    fn box_averages_blocks() {
+        let mut src = Work::new(4, 2, [0, 0, 0, MAX15]).unwrap();
+        src.px[1] = [400, 0, 0, MAX15];
+        src.px[5] = [400, 0, 0, MAX15];
+        let out = run(&src, 2, 1, SampleMode::Box);
+        assert_eq!(out.px[0][0], 200);
+        assert_eq!(out.px[1][0], 0);
+        let same = run(&src, 4, 2, SampleMode::Box);
+        assert_eq!(same, src);
+    }
+
+    #[test]
+    fn cluster_keeps_the_dominant_color() {
+        let mut src = Work::new(8, 8, [to15(250), 0, 0, MAX15]).unwrap();
+        src.px[0] = [0, 0, to15(250), MAX15];
+        src.px[9] = [0, to15(250), 0, MAX15];
+        let out = run(&src, 2, 2, SampleMode::Cluster);
+        assert!(
+            out.px.iter().all(|p| p[0] == to15(250) && p[1] == 0),
+            "{:?}",
+            out.px
+        );
     }
 
     #[test]
