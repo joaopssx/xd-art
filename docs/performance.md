@@ -121,3 +121,24 @@ Per lookup, one thread, web-216 with redmean on a 1024x1024 synthetic photo:
 
 The cache helps in proportion to how often colors repeat. On a noisy photo that is one
 lookup in four; on an image that was already reduced and smoothed it is most of them.
+
+### kd-tree threshold
+
+```sh
+cargo bench -p xd-art-bench --bench palette -- --warm-up-time 1 --measurement-time 2
+```
+
+Time for 4096 exact lookups against random palettes, in µs, one thread:
+
+| colors | 16 | 24 | 32 | 48 | 64 | 128 | 256 |
+|---|---|---|---|---|---|---|---|
+| redmean, linear | 206 | 348 | 404 | 642 | 795 | 1595 | 3137 |
+| redmean, kd-tree | 384 | 476 | 527 | 639 | 678 | 838 | 1042 |
+| rgb, linear | 180 | 286 | 345 | 515 | 702 | 1636 | 3206 |
+| rgb, kd-tree | 353 | 418 | 501 | 556 | 574 | 703 | 825 |
+
+The two meet around 48 colors, so the tree is built from 64 colors up (`KD_FROM`). It
+only exists for RGB, weighted, redmean and CIE76, the metrics with a per channel lower
+bound; CIE94 and CIEDE2000 always search linearly. The tree gives exactly the linear
+search's answer, ties included, which a test checks on 5000 colors for several palette
+sizes.

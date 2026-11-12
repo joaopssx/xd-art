@@ -25,5 +25,9 @@ harness = false
 name = "blur"
 harness = false
 
+[[bench]]
+name = "palette"
+harness = false
+
 [lints]
 workspace = true

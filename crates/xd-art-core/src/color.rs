@@ -185,23 +185,160 @@ fn ciede2000(b: Coords, c: Coords) -> f32 {
         as f32
 }
 
+/// Palettes with at least this many colors get a kd-tree, when the metric allows it.
+/// Below it the linear search wins; the crossover is measured in `docs/performance.md`.
+pub const KD_FROM: usize = 64;
+
+/// Smallest per channel weight of a metric, so that `weight * d * d` is a lower bound of
+/// the distance to anything on the far side of a splitting plane `d` away. `None` for
+/// the metrics that have no such bound (CIE94 and CIEDE2000).
+fn axis_weights(metric: Metric) -> Option<[f32; 3]> {
+    match metric {
+        Metric::Rgb | Metric::Cie76 => Some([1.0; 3]),
+        // Weighted: red is 2 or 3, green 4, blue 3 or 2. Redmean: red 2 + r/256 with r
+        // in 0..255, green 4, blue 2 + (255 - r)/256. Same minimums for both.
+        Metric::Weighted | Metric::Redmean => Some([2.0, 4.0, 2.0]),
+        Metric::Cie94 | Metric::Ciede2000 => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Node {
+    point: Coords,
+    index: u8,
+    axis: u8,
+    left: u16,
+    right: u16,
+}
+
+const NONE: u16 = u16::MAX;
+
+/// A kd-tree over the palette in the metric's coordinates. Queries give exactly the
+/// linear search's answer, ties included: the distance is the same function, pruning
+/// only skips subtrees whose lower bound is clearly larger than the best so far, and
+/// equal distances prefer the lower palette index.
+#[derive(Clone, Debug)]
+struct KdTree {
+    nodes: Vec<Node>,
+    root: u16,
+    weights: [f32; 3],
+}
+
+impl KdTree {
+    fn new(coords: &[Coords], weights: [f32; 3]) -> Self {
+        let mut idx: Vec<u8> = (0..coords.len()).map(|i| i as u8).collect();
+        let mut nodes = Vec::with_capacity(coords.len());
+        let root = Self::build(coords, &mut idx, 0, &mut nodes);
+        Self {
+            nodes,
+            root,
+            weights,
+        }
+    }
+
+    fn build(coords: &[Coords], idx: &mut [u8], depth: usize, nodes: &mut Vec<Node>) -> u16 {
+        if idx.is_empty() {
+            return NONE;
+        }
+        // Split on the axis with the widest spread, which beats round robin for
+        // palettes that are mostly one hue.
+        let spread = |a: usize| {
+            let (lo, hi) = idx.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &i| {
+                let v = coords[i as usize][a];
+                (lo.min(v), hi.max(v))
+            });
+            hi - lo
+        };
+        let axis = (0..3)
+            .max_by(|&a, &b| spread(a).total_cmp(&spread(b)))
+            .unwrap_or(depth % 3);
+        idx.sort_by(|&a, &b| {
+            coords[a as usize][axis]
+                .total_cmp(&coords[b as usize][axis])
+                .then(a.cmp(&b))
+        });
+        let mid = idx.len() / 2;
+        let index = idx[mid];
+        let at = nodes.len();
+        nodes.push(Node {
+            point: coords[index as usize],
+            index,
+            axis: axis as u8,
+            left: NONE,
+            right: NONE,
+        });
+        let (lo, hi) = idx.split_at_mut(mid);
+        let left = Self::build(coords, lo, depth + 1, nodes);
+        let right = Self::build(coords, &mut hi[1..], depth + 1, nodes);
+        nodes[at].left = left;
+        nodes[at].right = right;
+        at as u16
+    }
+
+    fn closest(&self, metric: Metric, p: Coords) -> u8 {
+        let mut best = (f32::MAX, u8::MAX);
+        // (node, lower bound of anything below it). Depth is at most 9 for 256 colors.
+        let mut stack = [(NONE, 0.0f32); 32];
+        stack[0] = (self.root, 0.0);
+        let mut top = 1;
+        while top > 0 {
+            top -= 1;
+            let (n, bound) = stack[top];
+            if n == NONE || bound > best.0 {
+                continue;
+            }
+            let node = &self.nodes[n as usize];
+            let d = distance(metric, p, node.point);
+            if d < best.0 || (d == best.0 && node.index < best.1) {
+                best = (d, node.index);
+            }
+            let a = node.axis as usize;
+            let diff = p[a] - node.point[a];
+            let (near, far) = if diff < 0.0 {
+                (node.left, node.right)
+            } else {
+                (node.right, node.left)
+            };
+            // A hair under the true bound, so f32 rounding can never prune the answer.
+            let far_bound = bound.max(self.weights[a] * diff * diff * 0.999);
+            stack[top] = (far, far_bound);
+            stack[top + 1] = (near, bound);
+            top += 2;
+        }
+        best.1
+    }
+}
+
 /// A palette prepared for one metric: every color converted once.
 #[derive(Clone, Debug)]
 pub struct Matcher {
     metric: Metric,
     colors: Vec<[u8; 3]>,
     coords: Vec<Coords>,
+    tree: Option<KdTree>,
 }
 
 impl Matcher {
-    /// Prepares `colors` for `metric`.
+    /// Prepares `colors` for `metric`. Builds a kd-tree for palettes of [`KD_FROM`]
+    /// colors or more when the metric allows exact pruning.
     #[must_use]
     pub fn new(colors: &[[u8; 3]], metric: Metric) -> Self {
+        let coords: Vec<Coords> = colors.iter().map(|&c| coords(metric, c)).collect();
+        let tree = axis_weights(metric)
+            .filter(|_| colors.len() >= KD_FROM)
+            .map(|w| KdTree::new(&coords, w));
         Self {
             metric,
             colors: colors.to_vec(),
-            coords: colors.iter().map(|&c| coords(metric, c)).collect(),
+            coords,
+            tree,
         }
+    }
+
+    /// Whether lookups go through a kd-tree.
+    #[must_use]
+    pub fn has_tree(&self) -> bool {
+        self.tree.is_some()
     }
 
     /// The metric.
@@ -218,8 +355,18 @@ impl Matcher {
 
     /// Index of the closest palette color. Ties go to the lower index, as in the
     /// original's linear search.
+    #[inline]
     #[must_use]
     pub fn closest(&self, c: [u8; 3]) -> u8 {
+        match &self.tree {
+            Some(t) => t.closest(self.metric, coords(self.metric, c)),
+            None => self.closest_linear(c),
+        }
+    }
+
+    /// [`Matcher::closest`] without the kd-tree. Same answer, kept for comparisons.
+    #[must_use]
+    pub fn closest_linear(&self, c: [u8; 3]) -> u8 {
         let p = coords(self.metric, c);
         let mut best = 1e12f32;
         let mut idx = 0u8;
@@ -508,6 +655,28 @@ mod tests {
         for &c in &pal {
             assert_eq!(pal[lut.closest(&m, c) as usize], c);
         }
+    }
+
+    #[test]
+    fn kd_tree_matches_linear_search() {
+        for n in [KD_FROM, 100, 256] {
+            let pal = pseudo_colors(n);
+            for metric in Metric::ALL {
+                let m = Matcher::new(&pal, metric);
+                assert_eq!(
+                    m.has_tree(),
+                    !matches!(metric, Metric::Cie94 | Metric::Ciede2000)
+                );
+                for c in pseudo_colors(5000).into_iter().chain(pal.iter().copied()) {
+                    assert_eq!(m.closest(c), m.closest_linear(c), "{metric:?} {n} {c:?}");
+                }
+            }
+        }
+        // Duplicate colors: the lower index has to win, like in the linear search.
+        let mut dup = pseudo_colors(40);
+        dup[30] = dup[3];
+        let m = Matcher::new(&dup, Metric::Rgb);
+        assert_eq!(m.closest(dup[3]), 3);
     }
 
     #[test]
