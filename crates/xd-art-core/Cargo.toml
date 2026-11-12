@@ -1,0 +1,31 @@
+[package]
+name = "xd-art-core"
+description = "Image to pixel art engine: sampling, palettes, dithering and post-processing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["pixel-art", "dithering", "palette", "image"]
+categories = ["multimedia::images", "graphics"]
+
+[features]
+default = ["parallel", "gif", "qoi", "serde"]
+# Split work across threads with rayon. Results are identical with or without it.
+parallel = []
+# Animated GIF import and export.
+gif = []
+# QOI image format.
+qoi = []
+# Recipes and JSON output.
+serde = []
+# Download palettes from Lospec. Off by default: nothing in the engine touches the
+# network unless this is enabled and the caller asks for it.
+online-palettes = []
+
+[dependencies]
+
+[lints]
+workspace = true
