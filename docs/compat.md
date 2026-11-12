@@ -17,6 +17,9 @@ of that build. Commit used: see `crates/xd-art-core/tests/golden/SOURCE`.
 | cluster sampling | identical |
 | bilinear, bicubic, Lanczos sampling | within 1 step of 255 per channel (tolerance of the test), on the test images identical except a few alpha values |
 | blur (compatible mode) | identical |
+| sharpen, tint | identical |
+| hue/saturation/contrast/brightness, gamma | within 1 step |
+| closest color, all six metrics | identical |
 
 ## Kept on purpose, although they look like bugs
 
@@ -32,6 +35,11 @@ of that build. Commit used: see `crates/xd-art-core/tests/golden/SOURCE`.
 - **Blur passes.** The original's blur runs three box passes on rows, and on columns it
   runs three as well but copies back the buffer that holds the second pass. Columns get
   two passes. xd-art's compatible blur does the same.
+- **CIEDE2000 rotation term.** The last term of the formula multiplies by the mean
+  hue `H'` where the standard has the hue difference `ΔH'`. It changes which palette
+  color wins for some inputs (146 of 3072 channels in the metric golden test before I
+  copied it). The other parts of the formula are standard, including the `f32`
+  constants promoted to `f64`.
 
 Changing any of these would make xd-art's results differ from the original's for the
 same settings, which is the one thing the port promises not to do.

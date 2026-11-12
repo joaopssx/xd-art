@@ -141,3 +141,42 @@ fn adjustments_match_the_original() {
     let a = adjusted(|i| prep::tint(i, [200, 150, 255], 1.0, &c).unwrap());
     assert_golden("adjust_tint", 24, 20, &a, 0);
 }
+
+/// Closest color per pixel, the original's "no dithering" path.
+fn closest_rgba(img: &Work, metric: xd_art_core::settings::Metric) -> Vec<u8> {
+    use xd_art_core::buffer::to8;
+    use xd_art_core::color::Matcher;
+    let m = Matcher::new(&common::PICO8, metric);
+    let mut out = Vec::new();
+    for p in &img.px {
+        if sampling::is_clear(*p, 128) {
+            out.extend([0; 4]);
+        } else {
+            let c = m.closest([to8(p[0]), to8(p[1]), to8(p[2])]);
+            out.extend(common::PICO8[c as usize]);
+            out.push(255);
+        }
+    }
+    out
+}
+
+#[test]
+fn metrics_pick_the_same_colors_as_the_original() {
+    use xd_art_core::settings::Metric;
+    let src = sampled(
+        &common::gradient().to_work(),
+        32,
+        24,
+        SampleMode::Bilinear,
+        (0.0, 0.0),
+    );
+    for m in Metric::ALL {
+        assert_golden(
+            &format!("metric_{}", m.name()),
+            32,
+            24,
+            &closest_rgba(&src, m),
+            0,
+        );
+    }
+}
