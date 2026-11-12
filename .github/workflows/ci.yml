@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: cargo fmt --all --check
+
+  # The gui crate pulls in gpui, which links against Wayland, X11, xkbcommon and
+  # Vulkan on Linux. The runner image does not ship the -dev packages, so they
+  # are installed here. Without them the gui crate would have to be excluded.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: system libraries for gpui
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libvulkan-dev libfontconfig-dev \
+            libfreetype-dev libssl-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup show
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
+      - run: cargo doc --workspace --no-deps
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup show
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
