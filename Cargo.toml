@@ -9,3 +9,31 @@ rust-version = "1.95"
 license = "MIT"
 authors = ["João Pedro de Sena Santana"]
 repository = "https://github.com/joaopssx/xd-art"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# Release-like speed with a much shorter link. Used while working on the
+# interface, where a debug build is too slow to judge.
+[profile.fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+incremental = true
+strip = false
+
+# Debug builds decode and resize images with optimized dependencies, otherwise
+# opening a large PNG in a debug build takes seconds.
+[profile.dev.package."*"]
+opt-level = 2
