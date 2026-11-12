@@ -1,0 +1,13 @@
+/target/
+*.local
+
+# editors
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# wasm build output
+/crates/xd-art-wasm/web/pkg/

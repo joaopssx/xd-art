@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+authors = ["João Pedro de Sena Santana"]
+repository = "https://github.com/joaopssx/xd-art"

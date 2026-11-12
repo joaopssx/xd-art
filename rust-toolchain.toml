@@ -1,0 +1,5 @@
+[toolchain]
+# gpui 0.2.2 is an edition 2024 crate and builds on current stable. Pinned so
+# CI and local builds use the same compiler and the same clippy lints.
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
