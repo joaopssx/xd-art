@@ -28,6 +28,10 @@ actions!(
         Compare,
         /// Show every dither mode side by side.
         Gallery,
+        /// Undo the last change.
+        Undo,
+        /// Redo the change undone last.
+        Redo,
     ]
 );
 
@@ -50,6 +54,8 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
         "before and after: divider, source only, off",
     ),
     ("ctrl-d", "cmd-d", "dither gallery"),
+    ("ctrl-z", "cmd-z", "undo"),
+    ("ctrl-shift-z", "cmd-shift-z", "redo"),
 ];
 
 /// Binds every shortcut.
@@ -69,5 +75,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(7), ToggleGrid, c),
         KeyBinding::new(k(8), Compare, c),
         KeyBinding::new(k(9), Gallery, c),
+        KeyBinding::new(k(10), Undo, c),
+        KeyBinding::new(k(11), Redo, c),
     ]);
 }

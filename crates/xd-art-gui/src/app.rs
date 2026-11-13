@@ -19,12 +19,13 @@ use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Siz
 
 use crate::Marks;
 use crate::actions::{
-    self, ActualSize, Compare, Fit, Gallery, Open, ToggleGrid, ToggleLeft, ToggleRight, ZoomIn,
-    ZoomOut,
+    self, ActualSize, Compare, Fit, Gallery, Open, Redo, ToggleGrid, ToggleLeft, ToggleRight, Undo,
+    ZoomIn, ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
 use crate::gallery;
+use crate::history::History;
 use crate::panels::{Choice, Section, Toggle};
 use crate::preview::Viewer;
 use crate::strip::Strip;
@@ -171,6 +172,10 @@ pub struct Root {
     pub(crate) strip: Strip,
     /// The dither gallery and hover previews.
     pub(crate) gallery: gallery::Gallery,
+    /// Undo and redo.
+    pub(crate) history: History,
+    /// Settings are being restored from the history and must not be recorded.
+    pub(crate) restoring: bool,
 }
 
 /// Wait after the last change before the exact conversion starts, so a burst of
@@ -229,6 +234,8 @@ impl Root {
             approximate: false,
             strip: Strip::default(),
             gallery: gallery::Gallery::default(),
+            history: History::default(),
+            restoring: false,
         }
     }
 
@@ -545,6 +552,11 @@ impl Root {
                             root.strip.counts = counts;
                             root.last_run = Some((started.elapsed(), report));
                             root.approximate = sid != id || !exact_metric || step < last;
+                            if !root.approximate
+                                && let Some(out) = &root.output
+                            {
+                                root.history.set_preview(out.clone());
+                            }
                             root.notice = None;
                         }
                         Ok((_, None, _, _)) | Err(xd_art_core::Error::Cancelled) => return false,
@@ -567,6 +579,9 @@ impl Root {
         if !live {
             self.sync_controls(cx);
             self.persist(cx);
+            if !self.restoring {
+                self.history.record(&self.settings);
+            }
         }
         if live {
             self.convert(true, cx);
@@ -828,6 +843,7 @@ impl Root {
                         let image = Arc::new(image);
                         root.source_id += 1;
                         root.output = None;
+                        root.history.start(&root.settings);
                         root.proxy = (image.width() as usize * image.height() as usize
                             > PROXY_FROM)
                             .then(|| {
@@ -1039,7 +1055,21 @@ impl Root {
             .overflow_y_scroll()
             .children(match side {
                 Side::Left => self.settings_panel(t, cx),
-                Side::Right => self.right_contents(t),
+                Side::Right => {
+                    let mut v = self.right_contents(t);
+                    if self.history.entries.len() > 1 {
+                        v.push(
+                            div()
+                                .mt_3()
+                                .text_size(theme::size::title())
+                                .text_color(t.text)
+                                .child("History")
+                                .into_any_element(),
+                        );
+                        v.extend(self.timeline(t, cx));
+                    }
+                    v
+                }
             });
         let row = div().h_full().flex().flex_none();
         match side {
@@ -1315,6 +1345,16 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Gallery, _, cx| this.toggle_gallery(cx)))
+            .on_action(cx.listener(|this, _: &Undo, _, cx| {
+                if let Some(s) = this.history.undo() {
+                    this.restore(s, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Redo, _, cx| {
+                if let Some(s) = this.history.redo() {
+                    this.restore(s, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &Compare, _, cx| {
                 this.viewer.cycle_compare();
                 cx.notify();
