@@ -7,9 +7,9 @@ use std::time::Instant;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, Context, ExternalPaths, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent,
-    PathPromptOptions, Pixels, PromptLevel, ScrollDelta, ScrollWheelEvent, SharedString, Window,
-    div, prelude::*, px, svg,
+    AnyElement, Context, Entity, ExternalPaths, FocusHandle, MouseButton, MouseDownEvent,
+    MouseMoveEvent, PathPromptOptions, Pixels, PromptLevel, ScrollDelta, ScrollWheelEvent,
+    SharedString, Subscription, Window, div, prelude::*, px, svg,
 };
 use xd_art_core::buffer::Image;
 use xd_art_core::settings::{PaletteSource, Settings};
@@ -22,6 +22,7 @@ use crate::assets::icon;
 use crate::config::Config;
 use crate::preview::Viewer;
 use crate::theme::{self, Palette, Theme};
+use crate::widgets::{Slider, SliderEvent, SliderSpec};
 
 /// What a dropped or opened file is, by its extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +106,17 @@ impl Default for Layout {
     }
 }
 
+/// A slider bound to one number in the settings.
+pub struct Control {
+    /// The slider.
+    pub slider: Entity<Slider>,
+    /// Writes the slider's value into the settings.
+    pub apply: fn(&mut Settings, f32),
+    /// Reads the value from the settings.
+    pub read: fn(&Settings) -> f32,
+    _sub: Subscription,
+}
+
 /// The application window's content.
 pub struct Root {
     marks: Marks,
@@ -121,6 +133,7 @@ pub struct Root {
     /// the latest.
     save_generation: u64,
     viewer: Viewer,
+    controls: Vec<Control>,
 }
 
 impl Root {
@@ -154,6 +167,81 @@ impl Root {
             notice: None,
             save_generation: 0,
             viewer: Viewer::default(),
+            controls: Vec::new(),
+        }
+    }
+
+    /// Adds a slider for one setting.
+    fn control(
+        &mut self,
+        spec: SliderSpec,
+        read: fn(&Settings) -> f32,
+        apply: fn(&mut Settings, f32),
+        cx: &mut Context<Self>,
+    ) {
+        let start = read(&self.settings);
+        let slider = cx.new(|cx| Slider::new(spec, start, cx));
+        let sub = cx.subscribe(&slider, move |this, _, e: &SliderEvent, cx| {
+            let SliderEvent::Changed { value, live } = *e;
+            apply(&mut this.settings, value);
+            if !live {
+                this.persist(cx);
+            }
+            cx.notify();
+        });
+        self.controls.push(Control {
+            slider,
+            apply,
+            read,
+            _sub: sub,
+        });
+    }
+
+    /// Builds the sliders. Kept apart from `new` because creating entities needs the
+    /// view's own context.
+    pub fn build_controls(&mut self, cx: &mut Context<Self>) {
+        let spec = |label: &str, min: f32, max: f32, step: f32, default: f32, decimals: usize| {
+            SliderSpec {
+                label: label.to_string().into(),
+                min,
+                max,
+                step,
+                default,
+                unit: "",
+                decimals,
+            }
+        };
+        self.control(
+            spec("brightness", -1.0, 1.0, 0.01, 0.0, 2),
+            |s| s.adjust.brightness,
+            |s, v| s.adjust.brightness = v,
+            cx,
+        );
+        self.control(
+            spec("contrast", 0.0, 3.0, 0.01, 1.0, 2),
+            |s| s.adjust.contrast,
+            |s, v| s.adjust.contrast = v,
+            cx,
+        );
+        self.control(
+            spec("saturation", 0.0, 3.0, 0.01, 1.0, 2),
+            |s| s.adjust.saturation,
+            |s, v| s.adjust.saturation = v,
+            cx,
+        );
+        self.control(
+            spec("gamma", 0.1, 4.0, 0.01, 1.0, 2),
+            |s| s.adjust.gamma,
+            |s, v| s.adjust.gamma = v,
+            cx,
+        );
+    }
+
+    /// Puts the settings back into every slider, after a recipe or palette changed them.
+    fn sync_controls(&mut self, cx: &mut Context<Self>) {
+        for c in &self.controls {
+            let v = (c.read)(&self.settings);
+            c.slider.update(cx, |s, cx| s.set_value(v, cx));
         }
     }
 
@@ -233,6 +321,7 @@ impl Root {
             Ok(s) => {
                 self.settings = s;
                 self.notice = Some(format!("recipe {}", path.display()).into());
+                self.sync_controls(cx);
                 self.persist(cx);
             }
             Err(e) => self.notice = Some(e.into()),
@@ -533,33 +622,40 @@ impl Root {
     }
 
     fn left_contents(&self, t: Palette) -> Vec<AnyElement> {
-        [
-            "Input",
-            "Prepare",
-            "Sampling",
-            "Color",
-            "Dithering",
-            "Post",
-            "Output",
-        ]
-        .into_iter()
-        .map(|name| {
-            div()
-                .flex()
-                .items_center()
-                .gap_1()
-                .text_size(theme::size::title())
-                .text_color(t.text)
-                .child(
-                    svg()
-                        .path(icon("chevron-right"))
-                        .size(px(12.0))
-                        .text_color(t.muted),
-                )
-                .child(name)
-                .into_any_element()
-        })
-        .collect()
+        let mut out: Vec<AnyElement> = self
+            .controls
+            .iter()
+            .map(|c| c.slider.clone().into_any_element())
+            .collect();
+        out.extend(
+            [
+                "Input",
+                "Prepare",
+                "Sampling",
+                "Color",
+                "Dithering",
+                "Post",
+                "Output",
+            ]
+            .into_iter()
+            .map(|name| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_size(theme::size::title())
+                    .text_color(t.text)
+                    .child(
+                        svg()
+                            .path(icon("chevron-right"))
+                            .size(px(12.0))
+                            .text_color(t.muted),
+                    )
+                    .child(name)
+                    .into_any_element()
+            }),
+        );
+        out
     }
 
     fn right_contents(&self, t: Palette) -> Vec<AnyElement> {

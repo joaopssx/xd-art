@@ -12,6 +12,7 @@ pub mod assets;
 pub mod config;
 pub mod preview;
 pub mod theme;
+pub mod widgets;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -62,7 +63,11 @@ pub fn run() {
                 image: None,
             };
             let opened = cx.open_window(options, move |window, cx| {
-                let root = cx.new(|cx| app::Root::new(marks, config, window, cx));
+                let root = cx.new(|cx| {
+                    let mut root = app::Root::new(marks, config, window, cx);
+                    root.build_controls(cx);
+                    root
+                });
                 let handle = root.clone();
                 window.on_next_frame(move |_, cx| handle.update(cx, |root, _| root.first_frame()));
                 // The decode runs on a background thread, so starting it now cannot delay
