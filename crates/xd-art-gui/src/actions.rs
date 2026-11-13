@@ -40,6 +40,10 @@ actions!(
         CommandPalette,
         /// List every shortcut.
         ShortcutSheet,
+        /// Switch to the next theme.
+        NextTheme,
+        /// Take the accent color from the image, or go back to the theme's.
+        AccentFromImage,
     ]
 );
 
@@ -72,6 +76,16 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
     ),
     ("ctrl-k", "cmd-k", "command palette"),
     ("ctrl-/", "cmd-/", "list every shortcut"),
+    (
+        "ctrl-t",
+        "cmd-t",
+        "next theme: dark, darker, midnight, plum",
+    ),
+    (
+        "ctrl-shift-t",
+        "cmd-shift-t",
+        "accent color from the image on or off",
+    ),
 ];
 
 /// The action of [`SHORTCUTS`] entry `i`, to run it from the command palette.
@@ -92,7 +106,9 @@ pub fn command(i: usize) -> Box<dyn Action> {
         12 => Box::new(Variations),
         13 => Box::new(KeepVariation),
         14 => Box::new(CommandPalette),
-        _ => Box::new(ShortcutSheet),
+        15 => Box::new(ShortcutSheet),
+        16 => Box::new(NextTheme),
+        _ => Box::new(AccentFromImage),
     }
 }
 
@@ -119,6 +135,8 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(13), KeepVariation, c),
         KeyBinding::new(k(14), CommandPalette, c),
         KeyBinding::new(k(15), ShortcutSheet, c),
+        KeyBinding::new(k(16), NextTheme, c),
+        KeyBinding::new(k(17), AccentFromImage, c),
     ]);
 }
 
@@ -130,7 +148,7 @@ mod tests {
     fn every_shortcut_has_a_command() {
         // command() falls through to the last action, so the list and the match have
         // to stay the same length; the names make a mismatch obvious.
-        assert_eq!(command(SHORTCUTS.len() - 1).name(), ShortcutSheet.name());
+        assert_eq!(command(SHORTCUTS.len() - 1).name(), AccentFromImage.name());
         assert_eq!(command(0).name(), Open.name());
     }
 }

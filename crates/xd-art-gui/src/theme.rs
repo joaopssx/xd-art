@@ -155,6 +155,15 @@ impl Theme {
         });
     }
 
+    /// Installs `variant` with `accent` in place of its own accent color.
+    pub fn set_accent(variant: Variant, accent: Option<Rgba>, cx: &mut App) {
+        let mut c = variant.palette();
+        if let Some(a) = accent {
+            c.accent = a;
+        }
+        cx.set_global(Theme { variant, c });
+    }
+
     /// The current theme.
     pub fn get(cx: &App) -> Theme {
         cx.try_global::<Theme>().copied().unwrap_or(Theme {
@@ -162,6 +171,46 @@ impl Theme {
             c: Variant::Dark.palette(),
         })
     }
+}
+
+/// Relative luminance, as WCAG defines it.
+pub fn luminance(c: Rgba) -> f32 {
+    let lin = |v: f32| {
+        if v <= 0.040_45 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+}
+
+/// WCAG contrast ratio between two colors.
+pub fn contrast(a: Rgba, b: Rgba) -> f32 {
+    let (x, y) = (luminance(a), luminance(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// An accent color taken from `colors`: the most saturated one that still has 4.5:1
+/// contrast with every surface of `p`. `None` when no color qualifies, which keeps the
+/// theme's own accent.
+pub fn accent_from(colors: &[[u8; 3]], p: &Palette) -> Option<Rgba> {
+    colors
+        .iter()
+        .map(|c| rgb(u32::from(c[0]) << 16 | u32::from(c[1]) << 8 | u32::from(c[2])))
+        .filter(|c| {
+            [p.base, p.panel, p.elevated]
+                .iter()
+                .all(|bg| contrast(*c, *bg) >= 4.5)
+        })
+        .map(|c| {
+            let max = c.r.max(c.g).max(c.b);
+            let min = c.r.min(c.g).min(c.b);
+            (max - min, c)
+        })
+        .filter(|(sat, _)| *sat > 0.25)
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, c)| c)
 }
 
 /// `color` with alpha `a`, for hover and pressed states.
@@ -218,6 +267,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn accent_from_palette_respects_contrast() {
+        let p = Variant::Dark.palette();
+        // Dark navy fails the contrast check; the bright orange wins over the gray.
+        let picked = accent_from(
+            &[[0x1d, 0x2b, 0x53], [0xc2, 0xc3, 0xc7], [0xff, 0xa3, 0x00]],
+            &p,
+        )
+        .unwrap();
+        assert_eq!(picked, rgb(0x00ff_a300));
+        assert!(accent_from(&[[0x10, 0x10, 0x10], [0x80, 0x80, 0x80]], &p).is_none());
     }
 
     #[test]

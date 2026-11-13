@@ -19,8 +19,9 @@ use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Siz
 
 use crate::Marks;
 use crate::actions::{
-    self, ActualSize, CommandPalette, Compare, Fit, Gallery, KeepVariation, Open, Redo,
-    ShortcutSheet, ToggleGrid, ToggleLeft, ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
+    self, AccentFromImage, ActualSize, CommandPalette, Compare, Fit, Gallery, KeepVariation,
+    NextTheme, Open, Redo, ShortcutSheet, ToggleGrid, ToggleLeft, ToggleRight, Undo, Variations,
+    ZoomIn, ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
@@ -556,6 +557,9 @@ impl Root {
                             root.output = Some(Arc::new(out));
                             root.strip.colors = palette;
                             root.strip.counts = counts;
+                            if root.config.accent_from_image {
+                                root.apply_theme(cx);
+                            }
                             root.last_run = Some((started.elapsed(), report));
                             root.approximate = sid != id || !exact_metric || step < last;
                             if !root.approximate
@@ -666,6 +670,19 @@ impl Root {
             Doc::Ready { image, .. } => Some(image.clone()),
             _ => None,
         }
+    }
+
+    /// Applies the theme from the config, with the accent from the current palette when
+    /// that is turned on.
+    pub(crate) fn apply_theme(&mut self, cx: &mut Context<Self>) {
+        let variant = Theme::get(cx).variant;
+        let accent = self
+            .config
+            .accent_from_image
+            .then(|| theme::accent_from(&self.strip.colors, &variant.palette()))
+            .flatten();
+        Theme::set_accent(variant, accent, cx);
+        cx.notify();
     }
 
     /// The root's focus handle, for widgets that type into the root.
@@ -1387,6 +1404,20 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Gallery, _, cx| this.toggle_gallery(cx)))
+            .on_action(cx.listener(|this, _: &NextTheme, _, cx| {
+                let v = Theme::get(cx).variant;
+                let next =
+                    theme::Variant::from_index((v.index() + 1) % theme::Variant::ALL.len() as u8);
+                Theme::set(next, cx);
+                this.apply_theme(cx);
+                this.notice = Some(format!("theme: {}", next.name()).into());
+                this.persist(cx);
+            }))
+            .on_action(cx.listener(|this, _: &AccentFromImage, _, cx| {
+                this.config.accent_from_image = !this.config.accent_from_image;
+                this.apply_theme(cx);
+                this.persist(cx);
+            }))
             .on_action(cx.listener(|this, _: &CommandPalette, _, cx| {
                 this.commands.open = !this.commands.open;
                 this.commands.sheet = false;
