@@ -199,11 +199,13 @@ conversion keeps one pipeline per thread for exactly this reason.
 What `xd-art` does from launch to the first frame, in order:
 
 1. Collects the command line arguments as paths. Nothing is opened yet.
-2. Starts gpui and creates the window (1280x800, centered).
-3. Creates the root view with no image.
-4. If a path was given (also the case when a file is dropped on the executable), starts
+2. Reads the config file (a few hundred bytes). In resident mode, tries to hand the
+   paths to a running instance and exits if one takes them.
+3. Starts gpui and creates the window (1280x800, centered).
+4. Creates the root view with no image.
+5. If a path was given (also the case when a file is dropped on the executable), starts
    decoding it on a background thread. The UI thread never waits for it.
-5. Draws the first frame: the empty state, or "opening <file>".
+6. Draws the first frame: the empty state, or "opening <file>".
 
 Not done at startup, on purpose: scanning folders for recent files or user palettes,
 building any palette, reading or writing anything else than the config file (added
@@ -223,19 +225,48 @@ is shown, and prints medians. Measured on the machine above with the release pro
 
 | step | empty window | with a 200x120 PNG |
 |------|-------------:|-------------------:|
-| platform (gpui ready) | 242.83 ms | 244.13 ms |
-| config read | 243.12 ms | 244.40 ms |
-| window created | 261.53 ms | 262.99 ms |
-| first frame | 266.61 ms | 268.26 ms |
-| image decoded | | 272.26 ms |
-| converted image shown | | 274.30 ms |
-| whole run, from outside | 325.39 ms | 334.44 ms |
+| config read | 0.09 ms | 0.09 ms |
+| platform (gpui ready) | 238.73 ms | 237.73 ms |
+| window created | 254.97 ms | 253.55 ms |
+| first frame | 260.34 ms | 258.39 ms |
+| image decoded | | 262.49 ms |
+| converted image shown | | 264.76 ms |
+| whole run, from outside | 318.43 ms | 319.56 ms |
 
-Almost all of it is the first row: `Application::new()` and gpui's platform setup before
-it calls back. What xd-art does after that, config to first frame, is about 24 ms, and
-opening and converting a small image adds 6 to 8 ms more. The 60 ms between the
-first frame and the end of "whole run" is the process closing its window and exiting,
-which a user never waits for. Where the 240 ms inside gpui goes was not measured here.
+The config file is read before gpui starts, because resident mode (below) has to know
+whether to hand the paths over before creating anything. Almost all of the time is the
+second row: `Application::new()` and gpui's platform setup before it calls back. What
+xd-art does after that, up to the first frame, is about 22 ms, and opening and
+converting a small image adds 4 to 6 ms more. The 60 ms between the first frame and the
+end of "whole run" is the process closing its window and exiting, which a user never
+waits for. Where the 238 ms inside gpui goes was not measured here.
+
+### Resident instance
+
+With `--resident` (or the "stay resident" setting, Ctrl+Shift+R), the first instance
+listens on a local port and later launches hand their paths to it and exit before gpui
+starts. Measured on the same machine with the release build:
+
+| | time |
+|---|---|
+| later launch, inside the process, start of `main` to paths handed over | 1.5 ms (3 runs: 1.45, 1.52, 1.69) |
+| later launch, whole process from bash, median of 15 | 37.2 ms (36.5 to 45.3) |
+| normal launch to the image on screen, whole process, median of 15 | 319.56 ms |
+
+Memory of the resident process, read from Windows (working set and private bytes):
+
+| state | working set | private |
+|---|---|---|
+| empty window | 58.4 MB | 88.0 MB |
+| 200x120 image open | 67.8 MB | 100.8 MB |
+| after closing the window (minimized, image dropped) | 67.8 MB | 100.8 MB |
+
+Closing the window drops the image, the results and the stage cache, but the numbers do
+not go back down: the allocator keeps the freed pages for the next image instead of
+returning them to the system. For a small image like this one the difference is small
+either way. Most of the 58 MB is gpui and the graphics driver, and resident mode keeps
+all of it loaded for as long as it runs. To stop it: Ctrl+Q in its window, or turn the
+setting off and quit once.
 
 ## Live preview
 

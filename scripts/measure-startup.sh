@@ -61,7 +61,7 @@ median() {
 }
 
 echo "runs: $runs, binary: $bin${image:+, image: $image}"
-for step in platform config window "first frame" decoded "image shown"; do
+for step in config platform window "first frame" decoded "image shown"; do
     values=$(grep "trace: $step " "$log" | awk '{ print $(NF - 1) }')
     [ -n "$values" ] || continue
     printf '%-14s %9s ms (median)\n' "$step" "$(echo "$values" | median)"

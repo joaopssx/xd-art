@@ -6,7 +6,7 @@
 //! ```text
 //! "XDCF"  version: u8 (1)
 //! theme: u8   flags: u8 (bit 0 left panel open, bit 1 right panel open, bit 2 reduced
-//!   motion, bit 3 accent from the image)
+//!   motion, bit 3 accent from the image, bit 4 stay resident)
 //! left width: f32   right width: f32
 //! recent count: u8, then for each: length: u16, UTF-8 path
 //! recipe: length: u32, UTF-8 recipe JSON of the last settings
@@ -36,6 +36,8 @@ pub struct Config {
     pub reduced_motion: bool,
     /// Take the accent color from the image's palette.
     pub accent_from_image: bool,
+    /// Start as a resident instance, as if `--resident` was given.
+    pub resident: bool,
     /// Left panel width.
     pub left_width: f32,
     /// Right panel width.
@@ -54,6 +56,7 @@ impl Default for Config {
             right_open: true,
             reduced_motion: false,
             accent_from_image: false,
+            resident: false,
             left_width: 290.0,
             right_width: 250.0,
             recents: Vec::new(),
@@ -73,7 +76,8 @@ impl Config {
             u8::from(self.left_open)
                 | u8::from(self.right_open) << 1
                 | u8::from(self.reduced_motion) << 2
-                | u8::from(self.accent_from_image) << 3,
+                | u8::from(self.accent_from_image) << 3
+                | u8::from(self.resident) << 4,
         );
         b.extend_from_slice(&self.left_width.to_le_bytes());
         b.extend_from_slice(&self.right_width.to_le_bytes());
@@ -123,6 +127,7 @@ impl Config {
             right_open: flags & 2 != 0,
             reduced_motion: flags & 4 != 0,
             accent_from_image: flags & 8 != 0,
+            resident: flags & 16 != 0,
             left_width,
             right_width,
             recents,

@@ -17,6 +17,7 @@ pub mod gallery;
 pub mod history;
 pub mod panels;
 pub mod preview;
+pub mod resident;
 pub mod retouch;
 pub mod strip;
 pub mod theme;
@@ -54,16 +55,28 @@ pub struct Marks {
 pub fn run() {
     let start = Instant::now();
     // Paths only; nothing is opened until the window is up.
-    let paths: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+    let mut paths: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+    let resident_flag = paths.iter().any(|p| p.as_os_str() == "--resident");
+    paths.retain(|p| p.as_os_str() != "--resident");
+    // The one file read before the window: a few hundred bytes of preferences.
+    let config = config::load();
+    let config_read = Instant::now();
+    trace::mark(start, "config", config_read);
+    let server = if resident_flag || config.resident {
+        let info = resident::info_path();
+        if info.as_deref().is_some_and(|i| resident::send(i, &paths)) {
+            trace::mark(start, "handed over", Instant::now());
+            return;
+        }
+        info.and_then(|i| resident::listen(&i))
+    } else {
+        None
+    };
     Application::new()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             let platform = Instant::now();
             trace::mark(start, "platform", platform);
-            // The one file read before the window: a few hundred bytes of preferences.
-            let config = config::load();
-            let config_read = Instant::now();
-            trace::mark(start, "config", config_read);
             theme::Theme::set(theme::Variant::from_index(config.theme), cx);
             actions::bind(cx);
             let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), cx);
@@ -91,6 +104,9 @@ pub fn run() {
                     root.build_controls(cx);
                     root
                 });
+                if let Some(server) = server {
+                    root.update(cx, |root, cx| root.become_resident(server, window, cx));
+                }
                 let handle = root.clone();
                 window
                     .on_next_frame(move |_, cx| handle.update(cx, |root, cx| root.first_frame(cx)));

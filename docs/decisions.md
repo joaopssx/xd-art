@@ -246,3 +246,19 @@ millisecond. Ordered dithering is about 2 ms faster per 640x480 frame. Against t
 A full conversion in the live preview measured 5 ms on the CPU (see "Live preview" in
 `docs/performance.md`), so there is little left to win. If larger outputs ever make
 ordered dithering the bottleneck, the probe is the starting point.
+
+## 2026-11-13: resident instance over local TCP (S11)
+
+Resident mode is off unless `--resident` is given or the setting is on. It uses a TCP
+port on 127.0.0.1 and a random token written to `resident.txt` next to the config file,
+instead of a Unix socket on one system and a named pipe on another: one code path, only
+the standard library, and the handoff measured 1.5 ms. Other local users can reach the
+port but cannot read the token (the file is under `%APPDATA%` on Windows and mode 0600
+elsewhere), and a message with the wrong token gets no answer.
+
+gpui on Windows ends the process when its last window closes, so the resident instance
+cannot close its window and wait in the background. Closing the window minimizes it and
+drops the image and the caches instead; Ctrl+Q quits. A `resident.txt` left behind by a
+crash only costs the next launch a failed connection before it starts its own instance.
+The config file is now read before gpui starts, since resident mode has to decide
+whether to start gpui at all; it is a read of a few hundred bytes (0.09 ms).

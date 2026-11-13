@@ -4,13 +4,13 @@
 //! file path to append the lines there:
 //!
 //! ```text
-//! xd-art trace: platform         259.86 ms
-//! xd-art trace: config           260.25 ms
-//! xd-art trace: window           277.38 ms
-//! xd-art trace: first frame      282.56 ms
-//! xd-art trace: decoded          286.37 ms
-//! xd-art trace: pipeline      blur 0.0 sample 1.0 adjust 0.0 palette 0.0 map 0.5 post 0.0 output 0.0
-//! xd-art trace: image shown      291.16 ms
+//! xd-art trace: config             0.10 ms
+//! xd-art trace: platform         256.54 ms
+//! xd-art trace: window           273.10 ms
+//! xd-art trace: first frame      278.16 ms
+//! xd-art trace: decoded          282.23 ms
+//! xd-art trace: pipeline      blur 0.0 sample 0.7 adjust 0.0 palette 0.0 map 0.6 post 0.0 output 0.0
+//! xd-art trace: image shown      284.43 ms
 //! ```
 //!
 //! Times count from the start of `main`; whatever the system does before that (loading
@@ -116,8 +116,8 @@ impl Marks {
     /// Every step reached so far, as `(name, time)`, in order.
     pub fn steps(&self) -> Vec<(&'static str, Instant)> {
         [
-            ("platform", self.platform),
             ("config", self.config),
+            ("platform", self.platform),
             ("window", self.window),
             ("first frame", self.first_frame),
             ("decoded", self.image),
@@ -187,8 +187,8 @@ mod tests {
         let start = Instant::now();
         let m = Marks {
             start,
-            platform: None,
             config: Some(start),
+            platform: None,
             window: Some(start + Duration::from_millis(30)),
             first_frame: None,
             image: Some(start + Duration::from_millis(50)),

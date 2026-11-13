@@ -20,8 +20,8 @@ use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Siz
 use crate::Marks;
 use crate::actions::{
     self, AccentFromImage, ActualSize, CommandPalette, Compare, DevOverlay, ExportPanel, Fit,
-    Fullscreen, Gallery, KeepVariation, NextTheme, Open, Redo, ReduceMotion, ShortcutSheet,
-    ToggleGrid, ToggleLeft, ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
+    Fullscreen, Gallery, KeepVariation, NextTheme, Open, Quit, Redo, ReduceMotion, ShortcutSheet,
+    ToggleGrid, ToggleLeft, ToggleResident, ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
@@ -197,6 +197,8 @@ pub struct Root {
     pub(crate) export: crate::exporting::Export,
     /// The timing overlay is shown.
     pub(crate) dev_overlay: bool,
+    /// Listening for later launches, in resident mode.
+    pub(crate) resident: Option<crate::resident::Server>,
 }
 
 /// Length of interface transitions.
@@ -272,6 +274,7 @@ impl Root {
             output_scale: 1,
             export: crate::exporting::Export::default(),
             dev_overlay: false,
+            resident: None,
         }
     }
 
@@ -1606,6 +1609,25 @@ impl Render for Root {
             }))
             .capture_key_down(cx.listener(Self::command_key))
             .capture_key_down(cx.listener(Self::lospec_key))
+            .on_action(cx.listener(|this, _: &Quit, _, cx| {
+                if let Some(s) = &this.resident {
+                    s.stop();
+                }
+                cx.quit();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleResident, _, cx| {
+                this.config.resident = !this.config.resident;
+                this.notice = Some(
+                    if this.config.resident {
+                        "stay resident: on from the next start (ctrl+q quits)"
+                    } else {
+                        "stay resident: off from the next start"
+                    }
+                    .into(),
+                );
+                this.persist(cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &DevOverlay, _, cx| {
                 this.dev_overlay = !this.dev_overlay;
                 cx.notify();

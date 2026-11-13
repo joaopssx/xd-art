@@ -52,6 +52,10 @@ actions!(
         ExportPanel,
         /// Startup and conversion times over the preview.
         DevOverlay,
+        /// Stay resident after closing, from the next start.
+        ToggleResident,
+        /// Quit, also from a resident instance.
+        Quit,
     ]
 );
 
@@ -106,6 +110,12 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
         "cmd-shift-d",
         "startup and conversion times",
     ),
+    (
+        "ctrl-shift-r",
+        "cmd-shift-r",
+        "stay resident after closing, on or off",
+    ),
+    ("ctrl-q", "cmd-q", "quit"),
 ];
 
 /// The action of [`SHORTCUTS`] entry `i`, to run it from the command palette.
@@ -132,7 +142,9 @@ pub fn command(i: usize) -> Box<dyn Action> {
         18 => Box::new(Fullscreen),
         19 => Box::new(ReduceMotion),
         20 => Box::new(ExportPanel),
-        _ => Box::new(DevOverlay),
+        21 => Box::new(DevOverlay),
+        22 => Box::new(ToggleResident),
+        _ => Box::new(Quit),
     }
 }
 
@@ -165,6 +177,8 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(19), ReduceMotion, c),
         KeyBinding::new(k(20), ExportPanel, c),
         KeyBinding::new(k(21), DevOverlay, c),
+        KeyBinding::new(k(22), ToggleResident, c),
+        KeyBinding::new(k(23), Quit, c),
     ]);
 }
 
@@ -176,7 +190,7 @@ mod tests {
     fn every_shortcut_has_a_command() {
         // command() falls through to the last action, so the list and the match have
         // to stay the same length; the names make a mismatch obvious.
-        assert_eq!(command(SHORTCUTS.len() - 1).name(), DevOverlay.name());
+        assert_eq!(command(SHORTCUTS.len() - 1).name(), Quit.name());
         assert_eq!(command(0).name(), Open.name());
     }
 }
