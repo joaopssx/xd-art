@@ -20,6 +20,7 @@ pub mod preview;
 pub mod retouch;
 pub mod strip;
 pub mod theme;
+pub mod trace;
 pub mod variations;
 pub mod widgets;
 
@@ -35,12 +36,18 @@ use gpui::{
 pub struct Marks {
     /// When `main` started.
     pub start: Instant,
+    /// When gpui finished setting up and called back.
+    pub platform: Option<Instant>,
+    /// When the config file was read.
+    pub config: Option<Instant>,
     /// When the window was created.
     pub window: Option<Instant>,
     /// When the first frame was presented.
     pub first_frame: Option<Instant>,
-    /// When the first image was ready.
+    /// When the first image was decoded.
     pub image: Option<Instant>,
+    /// When the first converted image was on screen.
+    pub shown: Option<Instant>,
 }
 
 /// Starts the application and blocks until it quits.
@@ -51,8 +58,12 @@ pub fn run() {
     Application::new()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
+            let platform = Instant::now();
+            trace::mark(start, "platform", platform);
             // The one file read before the window: a few hundred bytes of preferences.
             let config = config::load();
+            let config_read = Instant::now();
+            trace::mark(start, "config", config_read);
             theme::Theme::set(theme::Variant::from_index(config.theme), cx);
             actions::bind(cx);
             let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), cx);
@@ -67,9 +78,12 @@ pub fn run() {
             };
             let marks = Marks {
                 start,
+                platform: Some(platform),
+                config: Some(config_read),
                 window: None,
                 first_frame: None,
                 image: None,
+                shown: None,
             };
             let opened = cx.open_window(options, move |window, cx| {
                 let root = cx.new(|cx| {
@@ -78,7 +92,8 @@ pub fn run() {
                     root
                 });
                 let handle = root.clone();
-                window.on_next_frame(move |_, cx| handle.update(cx, |root, _| root.first_frame()));
+                window
+                    .on_next_frame(move |_, cx| handle.update(cx, |root, cx| root.first_frame(cx)));
                 // The decode runs on a background thread, so starting it now cannot delay
                 // the window; it only has to wait for the window to exist.
                 if !paths.is_empty() {

@@ -50,6 +50,8 @@ actions!(
         ReduceMotion,
         /// Export, recipes and palette import.
         ExportPanel,
+        /// Startup and conversion times over the preview.
+        DevOverlay,
     ]
 );
 
@@ -99,6 +101,11 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
     ),
     ("ctrl-shift-m", "cmd-shift-m", "transitions off or on"),
     ("ctrl-s", "cmd-s", "export, recipes and palette import"),
+    (
+        "ctrl-shift-d",
+        "cmd-shift-d",
+        "startup and conversion times",
+    ),
 ];
 
 /// The action of [`SHORTCUTS`] entry `i`, to run it from the command palette.
@@ -124,7 +131,8 @@ pub fn command(i: usize) -> Box<dyn Action> {
         17 => Box::new(AccentFromImage),
         18 => Box::new(Fullscreen),
         19 => Box::new(ReduceMotion),
-        _ => Box::new(ExportPanel),
+        20 => Box::new(ExportPanel),
+        _ => Box::new(DevOverlay),
     }
 }
 
@@ -156,6 +164,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(18), Fullscreen, c),
         KeyBinding::new(k(19), ReduceMotion, c),
         KeyBinding::new(k(20), ExportPanel, c),
+        KeyBinding::new(k(21), DevOverlay, c),
     ]);
 }
 
@@ -167,7 +176,7 @@ mod tests {
     fn every_shortcut_has_a_command() {
         // command() falls through to the last action, so the list and the match have
         // to stay the same length; the names make a mismatch obvious.
-        assert_eq!(command(SHORTCUTS.len() - 1).name(), ExportPanel.name());
+        assert_eq!(command(SHORTCUTS.len() - 1).name(), DevOverlay.name());
         assert_eq!(command(0).name(), Open.name());
     }
 }

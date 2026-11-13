@@ -188,8 +188,32 @@ building any palette, reading or writing anything else than the config file (add
 later, one small read), checking for updates, any network access, creating a Lua state.
 Each of those happens the first time it is needed, or never.
 
-Timing of these steps is measured in the startup trace section below, once the trace
-exists.
+### Startup trace
+
+`XD_ART_TRACE=1` prints a line per step to stderr; `XD_ART_TRACE=file.log` appends them
+to a file. Ctrl+Shift+D shows the same times over the preview. Times count from the
+start of `main`, so loading the executable is not in them.
+
+`scripts/measure-startup.sh [runs] [image]` runs the release build that many times (one
+extra warm-up run), each run quitting by itself after the first frame or after the image
+is shown, and prints medians. Measured on the machine above with the release profile,
+15 runs, warm file cache:
+
+| step | empty window | with a 200x120 PNG |
+|------|-------------:|-------------------:|
+| platform (gpui ready) | 242.83 ms | 244.13 ms |
+| config read | 243.12 ms | 244.40 ms |
+| window created | 261.53 ms | 262.99 ms |
+| first frame | 266.61 ms | 268.26 ms |
+| image decoded | | 272.26 ms |
+| converted image shown | | 274.30 ms |
+| whole run, from outside | 325.39 ms | 334.44 ms |
+
+Almost all of it is the first row: `Application::new()` and gpui's platform setup before
+it calls back. What xd-art does after that, config to first frame, is about 24 ms, and
+opening and converting a small image adds 6 to 8 ms more. The 60 ms between the
+first frame and the end of "whole run" is the process closing its window and exiting,
+which a user never waits for. Where the 240 ms inside gpui goes was not measured here.
 
 ## Live preview
 

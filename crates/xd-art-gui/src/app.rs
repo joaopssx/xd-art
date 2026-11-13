@@ -14,14 +14,14 @@ use gpui::{
 };
 use xd_art_core::buffer::Image;
 use xd_art_core::cancel::Cancel;
-use xd_art_core::pipeline::{Pipeline, Report, Stage};
+use xd_art_core::pipeline::{Pipeline, Report};
 use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Size};
 
 use crate::Marks;
 use crate::actions::{
-    self, AccentFromImage, ActualSize, CommandPalette, Compare, ExportPanel, Fit, Fullscreen,
-    Gallery, KeepVariation, NextTheme, Open, Redo, ReduceMotion, ShortcutSheet, ToggleGrid,
-    ToggleLeft, ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
+    self, AccentFromImage, ActualSize, CommandPalette, Compare, DevOverlay, ExportPanel, Fit,
+    Fullscreen, Gallery, KeepVariation, NextTheme, Open, Redo, ReduceMotion, ShortcutSheet,
+    ToggleGrid, ToggleLeft, ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
@@ -195,6 +195,8 @@ pub struct Root {
     pub(crate) output_scale: u32,
     /// The export panel.
     pub(crate) export: crate::exporting::Export,
+    /// The timing overlay is shown.
+    pub(crate) dev_overlay: bool,
 }
 
 /// Length of interface transitions.
@@ -220,7 +222,9 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        marks.window = Some(Instant::now());
+        let now = Instant::now();
+        marks.window = Some(now);
+        crate::trace::mark(marks.start, "window", now);
         let focus = cx.focus_handle();
         window.focus(&focus);
         let layout = Layout {
@@ -267,6 +271,7 @@ impl Root {
             retouch: crate::retouch::Retouch::default(),
             output_scale: 1,
             export: crate::exporting::Export::default(),
+            dev_overlay: false,
         }
     }
 
@@ -592,6 +597,15 @@ impl Root {
                                 && let Some(out) = &root.output
                             {
                                 root.history.set_preview(out.clone());
+                                if crate::trace::enabled()
+                                    && let Some((_, report)) = &root.last_run
+                                {
+                                    crate::trace::line(&format!(
+                                        "pipeline      {}",
+                                        crate::trace::stages(report)
+                                    ));
+                                }
+                                root.mark_shown(cx);
                             }
                             root.notice = None;
                         }
@@ -876,8 +890,15 @@ impl Root {
     }
 
     /// Records when the first frame was on screen.
-    pub fn first_frame(&mut self) {
-        self.marks.first_frame.get_or_insert_with(Instant::now);
+    pub fn first_frame(&mut self, cx: &mut Context<Self>) {
+        if self.marks.first_frame.is_none() {
+            let now = Instant::now();
+            self.marks.first_frame = Some(now);
+            crate::trace::mark(self.marks.start, "first frame", now);
+            if crate::trace::exit_after() == Some("frame") {
+                cx.quit();
+            }
+        }
     }
 
     /// Decodes `path` on a background thread and shows it when done.
@@ -901,7 +922,11 @@ impl Root {
                             list: frames,
                             ..Default::default()
                         };
-                        root.marks.image.get_or_insert_with(Instant::now);
+                        if root.marks.image.is_none() {
+                            let now = Instant::now();
+                            root.marks.image = Some(now);
+                            crate::trace::mark(root.marks.start, "decoded", now);
+                        }
                         root.config.remember(&path);
                         root.persist(cx);
                         root.viewer.fit();
@@ -1406,20 +1431,10 @@ fn status_parts(image: &Image, out: Option<&Image>, root: &Root) -> Vec<String> 
     v.push(format!("{used} colors"));
     v.push(root.settings.dither.mode.name().to_string());
     if let Some((took, report)) = &root.last_run {
-        let stages: Vec<String> = Stage::ALL
-            .iter()
-            .filter(|s| report.ran.contains(**s))
-            .map(|s| {
-                format!(
-                    "{} {:.1}",
-                    s.name(),
-                    report.times[*s as usize].as_secs_f64() * 1000.0
-                )
-            })
-            .collect();
+        let stages = crate::trace::stages(report);
         v.push(format!("{:.0} ms", took.as_secs_f64() * 1000.0));
         if !stages.is_empty() {
-            v.push(stages.join(" "));
+            v.push(stages);
         }
     }
     let cache = root
@@ -1591,6 +1606,10 @@ impl Render for Root {
             }))
             .capture_key_down(cx.listener(Self::command_key))
             .capture_key_down(cx.listener(Self::lospec_key))
+            .on_action(cx.listener(|this, _: &DevOverlay, _, cx| {
+                this.dev_overlay = !this.dev_overlay;
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &ExportPanel, _, cx| {
                 this.export.open = !this.export.open;
                 this.export.lospec = None;
@@ -1685,6 +1704,7 @@ impl Render for Root {
             .when(self.commands.open, |d| d.child(self.command_palette(t, cx)))
             .when(self.commands.sheet, |d| d.child(self.shortcut_sheet(t)))
             .when(self.export.open, |d| d.child(self.export_panel(t, cx)))
+            .when(self.dev_overlay, |d| d.child(self.dev_overlay(t)))
     }
 }
 
