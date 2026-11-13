@@ -10,6 +10,7 @@ pub mod actions;
 pub mod app;
 pub mod assets;
 pub mod config;
+pub mod gallery;
 pub mod panels;
 pub mod preview;
 pub mod strip;

@@ -26,6 +26,8 @@ actions!(
         ToggleGrid,
         /// Cycle the before and after comparison: divider, source only, off.
         Compare,
+        /// Show every dither mode side by side.
+        Gallery,
     ]
 );
 
@@ -47,6 +49,7 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
         "cmd-b",
         "before and after: divider, source only, off",
     ),
+    ("ctrl-d", "cmd-d", "dither gallery"),
 ];
 
 /// Binds every shortcut.
@@ -65,5 +68,6 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(6), ZoomOut, c),
         KeyBinding::new(k(7), ToggleGrid, c),
         KeyBinding::new(k(8), Compare, c),
+        KeyBinding::new(k(9), Gallery, c),
     ]);
 }

@@ -435,10 +435,33 @@ impl Root {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 apply(&mut this.settings, i);
                                 this.open_choice = None;
+                                this.hover_dither(None, cx);
                                 this.settings_changed(false, cx);
                             }))
+                            .when(id == "dither", |d| {
+                                d.on_hover(cx.listener(move |this, on: &bool, _, cx| {
+                                    let now = this.gallery.hover.as_ref().map(|(h, _)| *h);
+                                    if *on {
+                                        this.hover_dither(Some(i), cx);
+                                    } else if now == Some(i) {
+                                        this.hover_dither(None, cx);
+                                    }
+                                }))
+                            })
                             .child(name)
                     })),
+            );
+        }
+        if open && id == "dither" {
+            col = col.children(self.dither_hint_view(t));
+        }
+        if open && id == "sample-mode" {
+            col = col.child(
+                div()
+                    .px_2()
+                    .text_size(theme::size::small())
+                    .text_color(t.muted)
+                    .child(crate::gallery::sample_hint(self.settings.sample.mode)),
             );
         }
         col.into_any_element()

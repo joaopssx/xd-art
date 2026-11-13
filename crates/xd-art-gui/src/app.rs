@@ -19,10 +19,12 @@ use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Siz
 
 use crate::Marks;
 use crate::actions::{
-    self, ActualSize, Compare, Fit, Open, ToggleGrid, ToggleLeft, ToggleRight, ZoomIn, ZoomOut,
+    self, ActualSize, Compare, Fit, Gallery, Open, ToggleGrid, ToggleLeft, ToggleRight, ZoomIn,
+    ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
+use crate::gallery;
 use crate::panels::{Choice, Section, Toggle};
 use crate::preview::Viewer;
 use crate::strip::Strip;
@@ -167,6 +169,8 @@ pub struct Root {
     approximate: bool,
     /// The palette strip.
     pub(crate) strip: Strip,
+    /// The dither gallery and hover previews.
+    pub(crate) gallery: gallery::Gallery,
 }
 
 /// Wait after the last change before the exact conversion starts, so a burst of
@@ -224,6 +228,7 @@ impl Root {
             last_run: None,
             approximate: false,
             strip: Strip::default(),
+            gallery: gallery::Gallery::default(),
         }
     }
 
@@ -567,6 +572,9 @@ impl Root {
             self.convert(true, cx);
         } else {
             self.settle(cx);
+            if self.gallery.open {
+                self.fill_gallery(cx);
+            }
         }
         cx.notify();
     }
@@ -619,6 +627,15 @@ impl Root {
         for c in &self.controls {
             let v = (c.read)(&self.settings);
             c.slider.update(cx, |s, cx| s.set_value(v, cx));
+        }
+    }
+
+    /// The source to make small previews from: the reduced copy for big images, the
+    /// image itself otherwise.
+    pub(crate) fn small_source(&self) -> Option<Arc<Image>> {
+        match &self.doc {
+            Doc::Ready { image, .. } => Some(self.proxy.clone().unwrap_or_else(|| image.clone())),
+            _ => None,
         }
     }
 
@@ -1112,6 +1129,9 @@ impl Root {
             .when(self.viewer.panning.is_some() || self.viewer.space, |d| {
                 d.cursor_grab()
             });
+        if self.gallery.open && matches!(self.doc, Doc::Ready { .. }) {
+            return base.child(self.gallery_view(t, cx));
+        }
         if let Doc::Ready { image, .. } = &self.doc {
             let bg = [t.base.r, t.base.g, t.base.b].map(|v| (v * 255.0).round() as u8);
             let shown = self.output.clone().unwrap_or_else(|| image.clone());
@@ -1294,6 +1314,7 @@ impl Render for Root {
                 this.viewer.zoom_step(false);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &Gallery, _, cx| this.toggle_gallery(cx)))
             .on_action(cx.listener(|this, _: &Compare, _, cx| {
                 this.viewer.cycle_compare();
                 cx.notify();
