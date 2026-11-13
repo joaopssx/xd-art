@@ -171,3 +171,22 @@ allocator. A pipeline that already converted one frame converts the next one of 
 size (96x64 to 48x32, Floyd-Steinberg) with 12 allocations, none of them for pixels:
 one `Arc` per stage result, the palette, the color matcher and its cache. GIF
 conversion keeps one pipeline per thread for exactly this reason.
+
+## Startup
+
+What `xd-art` does from launch to the first frame, in order:
+
+1. Collects the command line arguments as paths. Nothing is opened yet.
+2. Starts gpui and creates the window (1280x800, centered).
+3. Creates the root view with no image.
+4. If a path was given (also the case when a file is dropped on the executable), starts
+   decoding it on a background thread. The UI thread never waits for it.
+5. Draws the first frame: the empty state, or "opening <file>".
+
+Not done at startup, on purpose: scanning folders for recent files or user palettes,
+building any palette, reading or writing anything else than the config file (added
+later, one small read), checking for updates, any network access, creating a Lua state.
+Each of those happens the first time it is needed, or never.
+
+Timing of these steps is measured in the startup trace section below, once the trace
+exists.
