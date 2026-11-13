@@ -1,0 +1,9 @@
+# scripts/compare-original.sh, 10 runs per case, median ms of the whole process
+# original: SoftLK-tools 783b808, built with gcc.exe (Rev5, Built by MSYS2 project) 16.1.0
+# xd-art: ecee106, release profile
+# system: MINGW64_NT-10.0-26200 3.6.10-5a1665c8.x86_64 x86_64, 32 threads
+# case original xd-art
+startup 43.6 32.0
+bayer 69.2 46.4
+floyd 97.5 59.9
+vga 186.6 45.2

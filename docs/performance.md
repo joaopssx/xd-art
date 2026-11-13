@@ -188,6 +188,42 @@ three times slower than a desktop and vary between runs. A case over budget show
 a failed (but allowed) job, which is the cue to run the criterion benches locally. If
 the runners turn out steady enough, removing `continue-on-error` makes it blocking.
 
+## Against the original
+
+```sh
+scripts/compare-original.sh [SoftLK-tools checkout] [runs]
+```
+
+The script builds the original's command line tool (`SLK_img2pix_cmd`) from source,
+without SDL: its three image functions from the GUI library are replaced by
+`scripts/original-cmd-shim.c`, which does the same thing with the same stb libraries.
+Both programs then convert the same synthetic images with the same JSON preset (the
+original's defaults with the size and dither mode changed; xd-art reads it with
+`--recipe`), using all cores. Each number is the median of 10 whole runs (start, load,
+convert, save, exit) after one warm-up run.
+
+Measured on the machine at the top of this page, original at SoftLK-tools commit
+`783b808` built with MSYS2 gcc 16.1.0 `-O3 -fopenmp`, xd-art at commit `ecee106`
+(release profile). Raw numbers: `docs/img/compare-original.txt`.
+
+| case | original | xd-art |
+|---|---|---|
+| 16x16 to 64x64, bayer 4x4 (mostly process start) | 43.6 ms | 32.0 ms |
+| 1920x1080 to 160x90, bayer 4x4 | 69.2 ms | 46.4 ms |
+| 1920x1080 to 320x180, Floyd-Steinberg | 97.5 ms | 59.9 ms |
+| 640x480 to 640x480, Floyd-Steinberg | 186.6 ms | 45.2 ms |
+
+![whole process time per case](img/compare-original.svg)
+
+The outputs of the two middle cases were compared pixel by pixel and are identical
+(0 of 14400 and 0 of 57600 pixels differ), so the times are for the same work. Most of
+the gap in the last case is error diffusion with the 256 color default palette: the
+original searches the palette for every pixel, xd-art caches the answers and runs the
+rows as a wavefront.
+
+Not compared: the startup of the two interfaces. The original's GUI needs SDL3, which
+is not installed on this machine, so only the command line tools were measured.
+
 ## GPU path (evaluated, not built)
 
 ```sh

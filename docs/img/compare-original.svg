@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="286" font-family="sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#16181d"/>
+<text x="16" y="24" fill="#e6e6e6" font-size="14">whole process time, median (ms), lower is better</text>
+<text x="16" y="66" fill="#b8b8b8">startup</text>
+<rect x="80" y="46" width="102.8" height="18" fill="#8a8f98"/>
+<text x="188.8" y="59" fill="#e6e6e6">43.6 original</text>
+<rect x="80" y="67" width="75.5" height="18" fill="#9b87f5"/>
+<text x="161.5" y="80" fill="#e6e6e6">32.0 xd-art</text>
+<text x="16" y="120" fill="#b8b8b8">bayer</text>
+<rect x="80" y="100" width="163.2" height="18" fill="#8a8f98"/>
+<text x="249.2" y="113" fill="#e6e6e6">69.2 original</text>
+<rect x="80" y="121" width="109.4" height="18" fill="#9b87f5"/>
+<text x="195.4" y="134" fill="#e6e6e6">46.4 xd-art</text>
+<text x="16" y="174" fill="#b8b8b8">floyd</text>
+<rect x="80" y="154" width="229.9" height="18" fill="#8a8f98"/>
+<text x="315.9" y="167" fill="#e6e6e6">97.5 original</text>
+<rect x="80" y="175" width="141.2" height="18" fill="#9b87f5"/>
+<text x="227.2" y="188" fill="#e6e6e6">59.9 xd-art</text>
+<text x="16" y="228" fill="#b8b8b8">vga</text>
+<rect x="80" y="208" width="440.0" height="18" fill="#8a8f98"/>
+<text x="526.0" y="221" fill="#e6e6e6">186.6 original</text>
+<rect x="80" y="229" width="106.6" height="18" fill="#9b87f5"/>
+<text x="192.6" y="242" fill="#e6e6e6">45.2 xd-art</text>
+</svg>

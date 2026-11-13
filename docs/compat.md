@@ -21,6 +21,7 @@ of that build. Commit used: see `crates/xd-art-core/tests/golden/SOURCE`.
 | hue/saturation/contrast/brightness, gamma | within 1 step |
 | closest color, all six metrics | identical |
 | every dither mode except median cut, including transparency | identical |
+| whole command line conversion with the original's default preset, bayer 4x4 and Floyd-Steinberg on a 1920x1080 image | identical files, checked with the original's own `SLK_img2pix_cmd` (see "Against the original" in `docs/performance.md`) |
 
 ## Kept on purpose, although they look like bugs
 
