@@ -162,7 +162,13 @@ pub struct Root {
     pipeline: Arc<Mutex<Pipeline>>,
     /// How long the last shown conversion took, from request to result, and what ran.
     last_run: Option<(Duration, Report)>,
+    /// The image shown came from the reduced copy or a cheaper metric.
+    approximate: bool,
 }
+
+/// Wait after the last change before the exact conversion starts, so a burst of
+/// changes (typing a value, clicking through options) runs it once.
+const SETTLE: Duration = Duration::from_millis(120);
 
 /// Sources with more pixels than this get a reduced copy that is converted first, so
 /// something shows within a few tens of milliseconds.
@@ -213,6 +219,7 @@ impl Root {
             cancel: None,
             pipeline: Arc::new(Mutex::new(Pipeline::default())),
             last_run: None,
+            approximate: false,
         }
     }
 
@@ -470,7 +477,13 @@ impl Root {
         self.cancel = Some(cancel.clone());
         self.generation += 1;
         let generation = self.generation;
-        let settings = self.settings.clone();
+        let mut settings = self.settings.clone();
+        if quick {
+            // The LAB metrics cost several times more per pixel; redmean stands in
+            // while dragging and the exact metric runs on release.
+            settings.colors.metric = settings.colors.metric.preview();
+        }
+        let exact_metric = settings.colors.metric == self.settings.colors.metric;
         let pipeline = self.pipeline.clone();
         let id = self.source_id;
         // Proxy results use their own id, so they do not evict the full size ones.
@@ -487,7 +500,8 @@ impl Root {
             if !quick || sources.is_empty() {
                 sources.push((full, id));
             }
-            for (src, sid) in sources {
+            let last = sources.len() - 1;
+            for (step, (src, sid)) in sources.into_iter().enumerate() {
                 let (pipeline, settings, cancel) =
                     (pipeline.clone(), settings.clone(), cancel.clone());
                 let result = cx
@@ -508,6 +522,7 @@ impl Root {
                         Ok((report, Some(out))) => {
                             root.output = Some(Arc::new(out));
                             root.last_run = Some((started.elapsed(), report));
+                            root.approximate = sid != id || !exact_metric || step < last;
                             root.notice = None;
                         }
                         Ok((_, None)) | Err(xd_art_core::Error::Cancelled) => return false,
@@ -531,8 +546,28 @@ impl Root {
             self.sync_controls(cx);
             self.persist(cx);
         }
-        self.convert(live, cx);
+        if live {
+            self.convert(true, cx);
+        } else {
+            self.settle(cx);
+        }
         cx.notify();
+    }
+
+    /// Runs the exact conversion once changes stop for [`SETTLE`].
+    fn settle(&mut self, cx: &mut Context<Self>) {
+        self.generation += 1;
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SETTLE).await;
+            this.update(cx, |root, cx| {
+                if root.generation == generation {
+                    root.convert(false, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Source size rows for the Input section.
@@ -1054,7 +1089,7 @@ impl Root {
             })
     }
 
-    fn status_bar(&self, t: Palette) -> impl IntoElement {
+    fn status_bar(&self, t: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let mut text = match &self.doc {
             Doc::Ready { image, .. } => match (&self.output, &self.last_run) {
                 (Some(out), Some((took, _))) => format!(
@@ -1089,7 +1124,21 @@ impl Root {
             .text_size(theme::size::small())
             .text_color(t.muted)
             .font(theme::number_font())
+            .gap_3()
             .child(text)
+            .when(self.approximate && self.output.is_some(), |d| {
+                d.child(
+                    div()
+                        .id("force-exact")
+                        .px_1()
+                        .rounded(px(3.0))
+                        .text_color(t.accent)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(t.elevated))
+                        .on_click(cx.listener(|this, _, _, cx| this.convert(false, cx)))
+                        .child("preview, click for exact"),
+                )
+            })
     }
 
     fn footer(t: Palette, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1228,7 +1277,7 @@ impl Render for Root {
             )
             .child(self.top_bar(t, cx))
             .child(middle)
-            .child(self.status_bar(t))
+            .child(self.status_bar(t, cx))
             .child(Self::footer(t, cx))
     }
 }

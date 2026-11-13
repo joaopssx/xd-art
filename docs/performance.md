@@ -205,3 +205,24 @@ it read 5 ms right after opening (Windows 11, Ryzen 9 7950X, `fast` profile).
 Sources above 1.5 megapixels also get a copy reduced to 1024 pixels on the long side.
 The first conversion of a new image runs on that copy first and shows it, then runs on
 the full image; while a slider is dragged, only the copy is converted.
+
+### While dragging
+
+A slider being dragged converts the reduced copy (for big sources) and swaps a LAB
+metric for redmean, the cheapest of the RGB ones; CIEDE2000 in particular costs several
+times more per comparison. The result is marked "preview" in the status bar, and a click
+there runs the exact conversion at once. Otherwise the exact one starts 120 ms after the
+last change, so typing a value or clicking through options runs it once.
+
+### Visible region
+
+The preview draws only what is visible: the image is upscaled on the CPU for exactly the
+part of it inside the view, at device resolution. Zooming into a corner of a 512x512
+result costs the same as looking at a 64x64 one.
+
+The conversion itself always runs on the whole image. I looked at converting only the
+visible part and decided against it. The result is small (64 to 512 pixels on a side in
+normal use) and the stages that work on it take a few milliseconds in total; the only
+expensive stage is the blur on the full source, which has to see the whole source
+anyway because sampling reads all of it. Error diffusion also cannot be cut into
+regions without changing the result, since every pixel depends on everything before it.
