@@ -227,3 +227,22 @@ transparent. Pencil strokes have their own undo list, used while the pencil or t
 eraser is active; mask strokes are settings changes and go through the normal history.
 The tools are off for animated GIFs, where a single layer over every frame would be
 wrong more often than right.
+
+## 2026-11-13: no GPU path (P16)
+
+I measured a wgpu prototype before writing any GPU code into xd-art (numbers in
+`docs/performance.md`, probe in `scripts/gpu-probe`). The resize is slower on the GPU
+once the image has to go there and back, because the CPU version is already under a
+millisecond. Ordered dithering is about 2 ms faster per 640x480 frame. Against that:
+
+- Setting up the GPU takes 330 ms or more, longer than the whole startup. It would have
+  to happen lazily on a background thread, and the first conversions would run on the
+  CPU anyway.
+- The shader works in `f32` while the engine matches the original's integer math
+  pixel for pixel. A shader that gives the same bytes is more work than the 2 ms it
+  saves, and a second, slightly different result is worse than a slower identical one.
+- wgpu is a large dependency for a feature that would be off by default.
+
+A full conversion in the live preview measured 5 ms on the CPU (see "Live preview" in
+`docs/performance.md`), so there is little left to win. If larger outputs ever make
+ordered dithering the bottleneck, the probe is the starting point.

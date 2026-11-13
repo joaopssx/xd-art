@@ -164,7 +164,29 @@ pixel receives its error the same as in the one thread loop. The result is ident
 (a test compares 1, 3 and 8 threads for every mode on a 320x240 image), and the speedup
 is lower than for the ordered modes because rows wait on each other.
 
-## Allocations
+## GPU path (evaluated, not built)
+
+```sh
+cd scripts/gpu-probe && cargo run --release
+```
+
+The probe runs the two stages that fit compute shaders best on wgpu 30.0.1 (Vulkan,
+NVIDIA GeForce RTX 4060 Ti) at the sizes of the CPU benchmarks above. "Round trip" is
+what xd-art would pay per call: upload, dispatch, copy back, map, read. "Dispatch only"
+leaves the data on the GPU. Medians of 50 calls; four runs of the probe gave the same
+values within 0.02 ms.
+
+| | GPU round trip | GPU dispatch only | CPU, 32 threads |
+|---|---|---|---|
+| bilinear 1920x1080 to 960x540 | 1.25 ms | 0.07 ms | 0.78 ms |
+| bayer 4x4, PICO-8, redmean, 640x480 | 0.48 ms | 0.08 ms | 2.44 ms |
+
+Setting the GPU up costs far more than either stage: creating the instance and adapter
+took 303 to 428 ms and the device 28 to 47 ms on warm runs (773 ms and 168 ms on the
+first run after boot), plus 14 to 27 ms for the two shaders and buffers.
+
+The decision is in `docs/decisions.md`: no GPU path for now.
+
 
 `crates/xd-art-core/tests/alloc.rs` counts heap allocations with a replacement global
 allocator. A pipeline that already converted one frame converts the next one of the same

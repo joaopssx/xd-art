@@ -1,4 +1,6 @@
 /target/
+/scripts/gpu-probe/target/
+/scripts/gpu-probe/Cargo.lock
 *.local
 
 # editors
