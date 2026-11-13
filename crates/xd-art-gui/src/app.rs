@@ -14,7 +14,7 @@ use gpui::{
 };
 use xd_art_core::buffer::Image;
 use xd_art_core::cancel::Cancel;
-use xd_art_core::pipeline::{Pipeline, Report};
+use xd_art_core::pipeline::{Pipeline, Report, Stage};
 use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Size};
 
 use crate::Marks;
@@ -1206,28 +1206,16 @@ impl Root {
     }
 
     fn status_bar(&self, t: Palette, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut text = match &self.doc {
-            Doc::Ready { image, .. } => match (&self.output, &self.last_run) {
-                (Some(out), Some((took, _))) => format!(
-                    "{} x {} -> {} x {}   {:.0} ms",
-                    image.width(),
-                    image.height(),
-                    out.width(),
-                    out.height(),
-                    took.as_secs_f64() * 1000.0
-                ),
-                _ => format!("{} x {}", image.width(), image.height()),
-            },
-            Doc::Loading(_) => "loading".into(),
-            Doc::Failed(_) => "error".into(),
-            Doc::Empty => String::new(),
+        let mut parts: Vec<String> = match &self.doc {
+            Doc::Ready { image, .. } => status_parts(image, self.output.as_deref(), self),
+            Doc::Loading(_) => vec!["loading".into()],
+            Doc::Failed(_) => vec!["error".into()],
+            Doc::Empty => Vec::new(),
         };
         if let Some(n) = &self.notice {
-            if !text.is_empty() {
-                text.push_str("   ");
-            }
-            text.push_str(n);
+            parts.push(n.to_string());
         }
+        let text = parts.join("   ");
         div()
             .h(px(22.0))
             .flex_none()
@@ -1276,6 +1264,42 @@ impl Root {
                     .child("github/joaopssx"),
             )
     }
+}
+
+/// What the status bar says about an open image: sizes, colors, dither mode, time of
+/// each stage that ran, and the memory held by the image, the result and the cache.
+fn status_parts(image: &Image, out: Option<&Image>, root: &Root) -> Vec<String> {
+    let mut v = vec![format!("{} x {}", image.width(), image.height())];
+    let Some(out) = out else { return v };
+    v[0] = format!("{} -> {} x {}", v[0], out.width(), out.height());
+    let used = root.strip.counts.iter().filter(|&&n| n > 0).count();
+    v.push(format!("{used} colors"));
+    v.push(root.settings.dither.mode.name().to_string());
+    if let Some((took, report)) = &root.last_run {
+        let stages: Vec<String> = Stage::ALL
+            .iter()
+            .filter(|s| report.ran.contains(**s))
+            .map(|s| {
+                format!(
+                    "{} {:.1}",
+                    s.name(),
+                    report.times[*s as usize].as_secs_f64() * 1000.0
+                )
+            })
+            .collect();
+        v.push(format!("{:.0} ms", took.as_secs_f64() * 1000.0));
+        if !stages.is_empty() {
+            v.push(stages.join(" "));
+        }
+    }
+    let cache = root
+        .pipeline
+        .try_lock()
+        .map(|p| p.older_bytes())
+        .unwrap_or(0);
+    let held = image.heap_size() + out.heap_size() + cache;
+    v.push(format!("{:.1} MB", held as f64 / (1 << 20) as f64));
+    v
 }
 
 /// Converts `images` into `dir` with `settings`, as PNG with the same names. Returns a
