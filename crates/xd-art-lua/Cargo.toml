@@ -1,0 +1,19 @@
+[package]
+name = "xd-art-lua"
+description = "Lua 5.4 scripting for xd-art"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+xd-art-core = { path = "../xd-art-core" }
+# Lua 5.4 compiled from source into the binary, so scripts work without a system Lua.
+mlua = { version = "0.12.2", features = ["lua54", "vendored"] }
+serde_json = "1.0.145"
+
+[lints]
+workspace = true

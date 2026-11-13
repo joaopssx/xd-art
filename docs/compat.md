@@ -71,3 +71,21 @@ same settings, which is the one thing the port promises not to do.
   blur is available as the compatible mode (`box_approx` in the settings).
 - **Default palette.** PICO-8 instead of DawnBringer 32, see
   [decisions.md](decisions.md).
+
+## Lua scripts
+
+`xd-art-cli run script.lua` (or `--script script.lua`, the original's spelling) gives
+scripts the original's `img2pixel` table, so its scripts run as they are. What is
+different:
+
+- **Defaults.** The `img2pixel` fields start at the original command line tool's
+  defaults (64x64, nearest, bayer 4x4, redmean), but the palette starts as PICO-8 with
+  `palette_colors = 16`, where the original starts with its own 256 color palette.
+  Scripts that set a palette or load a preset are not affected.
+- **Error output.** `img2pixel.process` returns `false` on failure like the original
+  and also prints the reason to stderr.
+- **No GUI script window.** The original can run scripts from its interface; xd-art
+  runs them from the command line only.
+
+Everything xd-art adds is in a separate global, `xd`, described in
+[scripting.md](scripting.md).

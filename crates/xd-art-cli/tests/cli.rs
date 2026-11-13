@@ -191,3 +191,46 @@ fn batch_with_json_lines() {
     assert!(out.join("second_16.png").exists());
     std::fs::remove_dir_all(&d).ok();
 }
+
+#[test]
+fn lua_scripts_run_and_report_errors_with_lines() {
+    let d = workdir("lua");
+    let input = sample(&d);
+    let out = d.join("lua.png");
+    let script = d.join("s.lua");
+    let fwd = |p: &std::path::Path| p.display().to_string().replace('\\', "/");
+    std::fs::write(
+        &script,
+        format!(
+            "local i = xd.load(\"{}\")
+xd.convert(i, {{sample = {{width = 8, height = 8}}}}):save(\"{}\")
+",
+            fwd(&input),
+            fwd(&out)
+        ),
+    )
+    .unwrap();
+    assert!(
+        bin()
+            .args(["run", script.to_str().unwrap()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert_eq!(xd_art_core::io::load(&out).unwrap().width(), 8);
+    std::fs::write(
+        &script,
+        "print(arg[1])
+error('stop here')
+",
+    )
+    .unwrap();
+    let o = bin()
+        .args(["--script", script.to_str().unwrap(), "first"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "first");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("s.lua:2"));
+    std::fs::remove_dir_all(&d).ok();
+}

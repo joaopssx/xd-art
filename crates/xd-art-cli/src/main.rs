@@ -21,6 +21,7 @@ xd-art-cli: convert images to pixel art
 usage:
   xd-art-cli convert <input> -o <output> [options]
   xd-art-cli batch <files, folders or patterns>... -o <folder> [options]
+  xd-art-cli run <script.lua> [args]...     (also: --script <file>)
   xd-art-cli info <file>...
   xd-art-cli list <palettes|presets|samplers|metrics|dithers>
   xd-art-cli --version
@@ -292,6 +293,32 @@ fn with_threads<R: Send>(threads: Option<usize>, f: impl FnOnce() -> R + Send) -
     }
 }
 
+fn run_script(p: &mut lexopt::Parser) -> Result<bool, Usage> {
+    let path = p.value()?.string()?;
+    let args: Vec<String> = p
+        .raw_args()?
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    #[cfg(feature = "lua")]
+    {
+        let file = xd_art_lua::resolve(&path);
+        match xd_art_lua::run_file(&file, &args) {
+            Ok(()) => Ok(true),
+            Err(e) => {
+                eprintln!("{e}");
+                Ok(false)
+            }
+        }
+    }
+    #[cfg(not(feature = "lua"))]
+    {
+        let _ = args;
+        Err(Usage(format!(
+            "cannot run {path}: this build has no Lua (feature lua)"
+        )))
+    }
+}
+
 fn run() -> Result<bool, Usage> {
     let mut p = lexopt::Parser::from_env();
     let Some(first) = p.next()? else {
@@ -307,7 +334,9 @@ fn run() -> Result<bool, Usage> {
             print!("{HELP}");
             Ok(true)
         }
+        Long("script") => run_script(&mut p),
         Value(cmd) => match cmd.string()?.as_str() {
+            "run" => run_script(&mut p),
             "convert" => run_convert(p),
             "batch" => batch::run(p),
             "info" => {

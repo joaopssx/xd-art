@@ -16,8 +16,12 @@ path = "src/main.rs"
 [dependencies]
 xd-art-core = { path = "../xd-art-core" }
 lexopt = "0.3.2"
+xd-art-lua = { path = "../xd-art-lua", optional = true }
 
 [features]
+default = ["lua"]
+# Runs Lua scripts with `run` and `--script`. Lua is compiled in, not taken from the system.
+lua = ["dep:xd-art-lua"]
 # Lets --lospec download palettes. Off by default, like in the engine.
 online-palettes = ["xd-art-core/online-palettes"]
 
