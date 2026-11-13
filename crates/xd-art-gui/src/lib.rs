@@ -10,6 +10,7 @@ pub mod actions;
 pub mod app;
 pub mod assets;
 pub mod config;
+pub mod preview;
 pub mod theme;
 
 use std::path::PathBuf;

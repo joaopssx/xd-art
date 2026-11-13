@@ -7,16 +7,20 @@ use std::time::Instant;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, Context, ExternalPaths, FocusHandle, MouseButton, MouseMoveEvent,
-    PathPromptOptions, Pixels, PromptLevel, SharedString, Window, div, prelude::*, px, svg,
+    AnyElement, Context, ExternalPaths, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent,
+    PathPromptOptions, Pixels, PromptLevel, ScrollDelta, ScrollWheelEvent, SharedString, Window,
+    div, prelude::*, px, svg,
 };
 use xd_art_core::buffer::Image;
 use xd_art_core::settings::{PaletteSource, Settings};
 
 use crate::Marks;
-use crate::actions::{self, Open, ToggleLeft, ToggleRight};
+use crate::actions::{
+    self, ActualSize, Fit, Open, ToggleGrid, ToggleLeft, ToggleRight, ZoomIn, ZoomOut,
+};
 use crate::assets::icon;
 use crate::config::Config;
+use crate::preview::Viewer;
 use crate::theme::{self, Palette, Theme};
 
 /// What a dropped or opened file is, by its extension.
@@ -116,6 +120,7 @@ pub struct Root {
     /// Bumped on every config change; a pending write only goes ahead if it is still
     /// the latest.
     save_generation: u64,
+    viewer: Viewer,
 }
 
 impl Root {
@@ -148,6 +153,7 @@ impl Root {
             settings,
             notice: None,
             save_generation: 0,
+            viewer: Viewer::default(),
         }
     }
 
@@ -331,6 +337,7 @@ impl Root {
                         root.marks.image.get_or_insert_with(Instant::now);
                         root.config.remember(&path);
                         root.persist(cx);
+                        root.viewer.fit();
                         Doc::Ready {
                             path,
                             image: Arc::new(image),
@@ -345,6 +352,40 @@ impl Root {
         .detach();
     }
 
+    fn image_size(&self) -> Option<(u32, u32)> {
+        match &self.doc {
+            Doc::Ready { image, .. } => Some((image.width(), image.height())),
+            _ => None,
+        }
+    }
+
+    fn on_wheel(&mut self, e: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.image_size().is_none() {
+            return;
+        }
+        let dy = match e.delta {
+            ScrollDelta::Lines(p) => p.y,
+            ScrollDelta::Pixels(p) => f32::from(p.y) / 40.0,
+        };
+        if dy.abs() < f32::EPSILON {
+            return;
+        }
+        let next = crate::preview::step(self.viewer_zoom(), dy > 0.0);
+        self.viewer.zoom_at(next, e.position);
+        cx.notify();
+    }
+
+    fn viewer_zoom(&self) -> f32 {
+        self.viewer.zoom
+    }
+
+    fn start_pan(&mut self, e: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if e.button == MouseButton::Middle || (e.button == MouseButton::Left && self.viewer.space) {
+            self.viewer.panning = Some(e.position);
+            cx.notify();
+        }
+    }
+
     /// Shows or hides a side panel.
     pub fn toggle(&mut self, side: Side, cx: &mut Context<Self>) {
         match side {
@@ -356,6 +397,16 @@ impl Root {
     }
 
     fn on_move(&mut self, e: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(last) = self.viewer.panning {
+            if e.pressed_button.is_none() {
+                self.viewer.panning = None;
+            } else {
+                self.viewer.pan_by(e.position - last);
+                self.viewer.panning = Some(e.position);
+                cx.notify();
+            }
+            return;
+        }
         let Some(side) = self.resizing else { return };
         if !e.dragging() {
             self.resizing = None;
@@ -570,19 +621,29 @@ impl Root {
         } else {
             Vec::new()
         };
-        div()
+        let base = div()
             .id("preview")
             .flex_1()
             .min_w_0()
             .h_full()
             .overflow_hidden()
-            .flex()
+            .bg(t.base)
+            .on_scroll_wheel(cx.listener(Self::on_wheel))
+            .on_mouse_down(MouseButton::Middle, cx.listener(Self::start_pan))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::start_pan))
+            .when(self.viewer.panning.is_some() || self.viewer.space, |d| {
+                d.cursor_grab()
+            });
+        if let Doc::Ready { image, .. } = &self.doc {
+            let bg = [t.base.r, t.base.g, t.base.b].map(|v| (v * 255.0).round() as u8);
+            return base.child(self.viewer.element(image.clone(), bg));
+        }
+        base.flex()
             .flex_col()
             .items_center()
             .justify_center()
             .gap_3()
             .p_4()
-            .bg(t.base)
             .text_size(theme::size::large())
             .text_color(t.muted)
             .child(svg().path(icon("open")).size_8().text_color(t.border))
@@ -697,6 +758,40 @@ impl Render for Root {
             .on_action(cx.listener(|this, _: &Open, window, cx| this.prompt_open(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleLeft, _, cx| this.toggle(Side::Left, cx)))
             .on_action(cx.listener(|this, _: &ToggleRight, _, cx| this.toggle(Side::Right, cx)))
+            .on_action(cx.listener(|this, _: &Fit, _, cx| {
+                this.viewer.fit();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ActualSize, _, cx| {
+                if let Some(size) = this.image_size() {
+                    this.viewer.actual_size(size);
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
+                this.viewer.zoom_step(true);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
+                this.viewer.zoom_step(false);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleGrid, _, cx| {
+                this.viewer.grid = !this.viewer.grid;
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _, cx| {
+                if e.keystroke.key == "space" && !this.viewer.space {
+                    this.viewer.space = true;
+                    cx.notify();
+                }
+            }))
+            .on_key_up(cx.listener(|this, e: &gpui::KeyUpEvent, _, cx| {
+                if e.keystroke.key == "space" {
+                    this.viewer.space = false;
+                    cx.notify();
+                }
+            }))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.open_many(paths.paths().to_vec(), window, cx);
             }))
@@ -714,6 +809,7 @@ impl Render for Root {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
+                    this.viewer.panning = None;
                     if this.resizing.take().is_some() {
                         this.persist(cx);
                         cx.notify();
