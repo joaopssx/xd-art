@@ -6,8 +6,10 @@
 //! decoded on a background thread once the window exists. `docs/performance.md` lists
 //! every step.
 
+pub mod actions;
 pub mod app;
 pub mod assets;
+pub mod config;
 pub mod theme;
 
 use std::path::PathBuf;
@@ -38,7 +40,10 @@ pub fn run() {
     Application::new()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
-            theme::Theme::set(theme::Variant::Dark, cx);
+            // The one file read before the window: a few hundred bytes of preferences.
+            let config = config::load();
+            theme::Theme::set(theme::Variant::from_index(config.theme), cx);
+            actions::bind(cx);
             let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -56,13 +61,13 @@ pub fn run() {
                 image: None,
             };
             let opened = cx.open_window(options, move |window, cx| {
-                let root = cx.new(|_| app::Root::new(marks));
+                let root = cx.new(|cx| app::Root::new(marks, config, window, cx));
                 let handle = root.clone();
                 window.on_next_frame(move |_, cx| handle.update(cx, |root, _| root.first_frame()));
                 // The decode runs on a background thread, so starting it now cannot delay
                 // the window; it only has to wait for the window to exist.
-                if let Some(first) = paths.first().cloned() {
-                    root.update(cx, |root, cx| root.open(first, cx));
+                if !paths.is_empty() {
+                    root.update(cx, |root, cx| root.open_many(paths, window, cx));
                 }
                 root
             });

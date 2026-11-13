@@ -4,15 +4,48 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use std::time::Duration;
+
 use gpui::{
-    AnyElement, Context, MouseButton, MouseMoveEvent, Pixels, SharedString, Window, div,
-    prelude::*, px, svg,
+    AnyElement, Context, ExternalPaths, FocusHandle, MouseButton, MouseMoveEvent,
+    PathPromptOptions, Pixels, PromptLevel, SharedString, Window, div, prelude::*, px, svg,
 };
 use xd_art_core::buffer::Image;
+use xd_art_core::settings::{PaletteSource, Settings};
 
 use crate::Marks;
+use crate::actions::{self, Open, ToggleLeft, ToggleRight};
 use crate::assets::icon;
+use crate::config::Config;
 use crate::theme::{self, Palette, Theme};
+
+/// What a dropped or opened file is, by its extension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// Something to convert.
+    Image,
+    /// Colors to use.
+    Palette,
+    /// Settings to apply.
+    Recipe,
+    /// Not something xd-art opens.
+    Other,
+}
+
+/// Sorts a path by extension.
+pub fn kind(path: &std::path::Path) -> Kind {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" | "jpg" | "jpeg" | "bmp" | "tga" | "qoi" | "gif" => Kind::Image,
+        "gpl" | "hex" | "pal" => Kind::Palette,
+        "json" => Kind::Recipe,
+        _ => Kind::Other,
+    }
+}
 
 /// What the window is showing.
 pub enum Doc {
@@ -75,18 +108,206 @@ pub struct Root {
     layout: Layout,
     /// The panel edge being dragged, if any.
     resizing: Option<Side>,
+    focus: FocusHandle,
+    config: Config,
+    settings: Settings,
+    /// One line for the status bar: what just happened.
+    notice: Option<SharedString>,
+    /// Bumped on every config change; a pending write only goes ahead if it is still
+    /// the latest.
+    save_generation: u64,
 }
 
 impl Root {
-    /// An empty view; `marks` carries the startup times so far.
-    pub fn new(mut marks: Marks) -> Self {
+    /// An empty view with the preferences from `config`; `marks` carries the startup
+    /// times so far. The last settings come back from the config, so an image opened
+    /// from the command line is converted the way the previous one was.
+    pub fn new(
+        mut marks: Marks,
+        config: Config,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         marks.window = Some(Instant::now());
+        let focus = cx.focus_handle();
+        window.focus(&focus);
+        let layout = Layout {
+            left_open: config.left_open,
+            right_open: config.right_open,
+            left_width: config.left_width,
+            right_width: config.right_width,
+        };
+        let settings = xd_art_core::recipe::from_json(&config.recipe).unwrap_or_default();
         Self {
             marks,
             doc: Doc::Empty,
-            layout: Layout::default(),
+            layout,
             resizing: None,
+            focus,
+            config,
+            settings,
+            notice: None,
+            save_generation: 0,
         }
+    }
+
+    /// Writes the config half a second after the last change, on a background thread.
+    fn persist(&mut self, cx: &mut Context<Self>) {
+        self.config.left_open = self.layout.left_open;
+        self.config.right_open = self.layout.right_open;
+        self.config.left_width = self.layout.left_width;
+        self.config.right_width = self.layout.right_width;
+        self.config.theme = Theme::get(cx).variant.index();
+        self.config.recipe = xd_art_core::recipe::to_json(&self.settings);
+        self.save_generation += 1;
+        let generation = self.save_generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            let Ok(Some(cfg)) = this.read_with(cx, |root, _| {
+                (root.save_generation == generation).then(|| root.config.clone())
+            }) else {
+                return;
+            };
+            cx.background_executor()
+                .spawn(async move { crate::config::store(&cfg) })
+                .await
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Opens what was given: images one by one or as a batch, palettes and recipes as
+    /// settings.
+    pub fn open_many(&mut self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        let images: Vec<PathBuf> = paths
+            .iter()
+            .filter(|p| kind(p) == Kind::Image)
+            .cloned()
+            .collect();
+        for p in &paths {
+            match kind(p) {
+                Kind::Palette => self.apply_palette(p, cx),
+                Kind::Recipe => self.apply_recipe(p, cx),
+                Kind::Other => {
+                    self.notice =
+                        Some(format!("{} is not an image, palette or recipe", p.display()).into())
+                }
+                Kind::Image => {}
+            }
+        }
+        match images.len() {
+            0 => cx.notify(),
+            1 => self.open(images[0].clone(), cx),
+            n => self.ask_batch(images, n, window, cx),
+        }
+    }
+
+    fn apply_palette(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        match xd_art_core::palette::Palette::load(path) {
+            Ok(p) => {
+                self.notice = Some(format!("palette {} ({} colors)", p.name, p.len()).into());
+                self.settings.colors.palette = PaletteSource::Colors(p.colors().to_vec());
+                self.persist(cx);
+            }
+            Err(e) => self.notice = Some(e.to_string().into()),
+        }
+    }
+
+    fn apply_recipe(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        let read = std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| {
+                xd_art_core::recipe::from_json(&t)
+                    .or_else(|_| xd_art_core::recipe::from_original(&t))
+                    .map_err(|e| e.to_string())
+            });
+        match read {
+            Ok(s) => {
+                self.settings = s;
+                self.notice = Some(format!("recipe {}", path.display()).into());
+                self.persist(cx);
+            }
+            Err(e) => self.notice = Some(e.into()),
+        }
+    }
+
+    /// Several images at once: offer to convert them all with the current settings.
+    fn ask_batch(
+        &mut self,
+        images: Vec<PathBuf>,
+        n: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = window.prompt(
+            PromptLevel::Info,
+            &format!("Convert {n} images with the current settings?"),
+            Some("Pick a folder for the results next."),
+            &["Convert", "Open the first one", "Cancel"],
+            cx,
+        );
+        let settings = self.settings.clone();
+        cx.spawn(async move |this, cx| {
+            match answer.await {
+                Ok(0) => {}
+                Ok(1) => {
+                    this.update(cx, |root, cx| root.open(images[0].clone(), cx))
+                        .ok();
+                    return;
+                }
+                _ => return,
+            }
+            let pick = cx.update(|cx| {
+                cx.prompt_for_paths(PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: None,
+                })
+            });
+            let Ok(pick) = pick else { return };
+            let Ok(Ok(Some(dirs))) = pick.await else {
+                return;
+            };
+            let Some(dir) = dirs.into_iter().next() else {
+                return;
+            };
+            let done = cx
+                .background_executor()
+                .spawn(async move { batch(&images, &dir, &settings) })
+                .await;
+            this.update(cx, |root, cx| {
+                root.notice = Some(done.into());
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Asks for files to open.
+    fn prompt_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pick = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: None,
+        });
+        let handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = pick.await else {
+                return;
+            };
+            handle
+                .update(cx, |_, window, cx| {
+                    this.update(cx, |root, cx| root.open_many(paths, window, cx))
+                        .ok();
+                })
+                .ok();
+        })
+        .detach();
     }
 
     /// Records when the first frame was on screen.
@@ -108,6 +329,8 @@ impl Root {
                 root.doc = match result {
                     Ok(image) => {
                         root.marks.image.get_or_insert_with(Instant::now);
+                        root.config.remember(&path);
+                        root.persist(cx);
                         Doc::Ready {
                             path,
                             image: Arc::new(image),
@@ -128,6 +351,7 @@ impl Root {
             Side::Left => self.layout.left_open = !self.layout.left_open,
             Side::Right => self.layout.right_open = !self.layout.right_open,
         }
+        self.persist(cx);
         cx.notify();
     }
 
@@ -189,6 +413,10 @@ impl Root {
             .child(
                 button("toggle-left", "chevron-right", self.layout.left_open)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle(Side::Left, cx))),
+            )
+            .child(
+                button("open", "open", false)
+                    .on_click(cx.listener(|this, _, window, cx| this.prompt_open(window, cx))),
             )
             .child(
                 div()
@@ -309,7 +537,7 @@ impl Root {
         }
     }
 
-    fn preview(&self, t: Palette) -> impl IntoElement {
+    fn preview(&self, t: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let text: SharedString = match &self.doc {
             Doc::Empty => "drop an image here".into(),
             Doc::Loading(_) => format!("opening {}", self.title()).into(),
@@ -318,7 +546,32 @@ impl Root {
             }
             Doc::Failed(e) => e.clone().into(),
         };
+        let recents: Vec<AnyElement> = if matches!(self.doc, Doc::Empty) {
+            self.config
+                .recents
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let path = p.clone();
+                    div()
+                        .id(("recent", i))
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.0))
+                        .text_size(theme::size::body())
+                        .text_color(t.muted)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(t.elevated).text_color(t.text))
+                        .on_click(cx.listener(move |this, _, _, cx| this.open(path.clone(), cx)))
+                        .child(p.display().to_string())
+                        .into_any_element()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         div()
+            .id("preview")
             .flex_1()
             .min_w_0()
             .h_full()
@@ -334,15 +587,25 @@ impl Root {
             .text_color(t.muted)
             .child(svg().path(icon("open")).size_8().text_color(t.border))
             .child(div().max_w_full().text_center().child(text))
+            .when(!recents.is_empty(), |d| {
+                d.child(div().mt_4().text_size(theme::size::small()).child("recent"))
+                    .child(div().flex().flex_col().items_center().children(recents))
+            })
     }
 
     fn status_bar(&self, t: Palette) -> impl IntoElement {
-        let text = match &self.doc {
+        let mut text = match &self.doc {
             Doc::Ready { image, .. } => format!("{} x {}", image.width(), image.height()),
             Doc::Loading(_) => "loading".into(),
             Doc::Failed(_) => "error".into(),
             Doc::Empty => String::new(),
         };
+        if let Some(n) = &self.notice {
+            if !text.is_empty() {
+                text.push_str("   ");
+            }
+            text.push_str(n);
+        }
         div()
             .h(px(22.0))
             .flex_none()
@@ -379,6 +642,31 @@ impl Root {
     }
 }
 
+/// Converts `images` into `dir` with `settings`, as PNG with the same names. Returns a
+/// one line summary.
+fn batch(images: &[PathBuf], dir: &std::path::Path, settings: &Settings) -> String {
+    let mut p = xd_art_core::pipeline::Pipeline::default();
+    let (mut ok, mut failed) = (0, 0);
+    for (i, path) in images.iter().enumerate() {
+        let out = dir.join(format!(
+            "{}.png",
+            path.file_stem().and_then(|s| s.to_str()).unwrap_or("image")
+        ));
+        let done = xd_art_core::io::load(path).and_then(|img| {
+            p.run(
+                &img,
+                i as u64 + 1,
+                settings,
+                &xd_art_core::cancel::Cancel::new(),
+            )?;
+            let img = p.output().ok_or(xd_art_core::Error::Cancelled)?;
+            xd_art_core::io::save(img, &out)
+        });
+        if done.is_ok() { ok += 1 } else { failed += 1 }
+    }
+    format!("{ok} converted into {}, {failed} failed", dir.display())
+}
+
 /// Width taken by the open panels, for layout math.
 pub fn panels_width(l: &Layout) -> Pixels {
     let mut w = 0.0;
@@ -398,11 +686,23 @@ impl Render for Root {
         if self.layout.left_open {
             middle = middle.child(self.panel(Side::Left, t, cx));
         }
-        middle = middle.child(self.preview(t));
+        middle = middle.child(self.preview(t, cx));
         if self.layout.right_open {
             middle = middle.child(self.panel(Side::Right, t, cx));
         }
         div()
+            .id("root")
+            .track_focus(&self.focus)
+            .key_context(actions::CONTEXT)
+            .on_action(cx.listener(|this, _: &Open, window, cx| this.prompt_open(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleLeft, _, cx| this.toggle(Side::Left, cx)))
+            .on_action(cx.listener(|this, _: &ToggleRight, _, cx| this.toggle(Side::Right, cx)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.open_many(paths.paths().to_vec(), window, cx);
+            }))
+            .drag_over::<ExternalPaths>(move |style, _, _, _| {
+                style.border_2().border_color(t.accent)
+            })
             .size_full()
             .flex()
             .flex_col()
@@ -415,6 +715,7 @@ impl Render for Root {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     if this.resizing.take().is_some() {
+                        this.persist(cx);
                         cx.notify();
                     }
                 }),
@@ -429,6 +730,15 @@ impl Render for Root {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kinds_by_extension() {
+        use std::path::Path;
+        assert_eq!(kind(Path::new("a.PNG")), Kind::Image);
+        assert_eq!(kind(Path::new("a.gpl")), Kind::Palette);
+        assert_eq!(kind(Path::new("r.json")), Kind::Recipe);
+        assert_eq!(kind(Path::new("notes.txt")), Kind::Other);
+    }
 
     #[test]
     fn panel_width_counts_open_panels_only() {
