@@ -648,6 +648,25 @@ mod tests {
     }
 
     #[test]
+    fn every_example_compiles() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/lua");
+        let mut n = 0;
+        for e in std::fs::read_dir(&dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.extension().and_then(|x| x.to_str()) == Some("lua") {
+                let code = std::fs::read_to_string(&p).unwrap();
+                Lua::new()
+                    .load(&code)
+                    .set_name(p.display().to_string())
+                    .into_function()
+                    .unwrap();
+                n += 1;
+            }
+        }
+        assert!(n >= 5);
+    }
+
+    #[test]
     fn errors_name_the_line() {
         let e = run("local x = 1\nerror('boom')", "script.lua", &[]).unwrap_err();
         assert!(e.contains("script.lua:2"), "{e}");

@@ -1,0 +1,7 @@
+{
+  "xd-art": 1,
+  "sample": { "mode": "box", "width": 160, "keep_aspect": true },
+  "adjust": { "contrast": 1.2, "gamma": 1.1 },
+  "colors": { "palette": "game-boy", "metric": "redmean" },
+  "dither": { "mode": "bayer4x4", "amount": 0.35 }
+}

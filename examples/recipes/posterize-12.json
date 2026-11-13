@@ -1,0 +1,6 @@
+{
+  "xd-art": 1,
+  "sample": { "mode": "edge", "width": 96, "keep_aspect": true, "edge_strength": 0.7 },
+  "colors": { "extract": { "count": 12, "method": "k-means" } },
+  "post": { "cleanup": 2 }
+}
