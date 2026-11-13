@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use gpui::{
@@ -12,6 +13,8 @@ use gpui::{
     SharedString, Subscription, Window, div, prelude::*, px, svg,
 };
 use xd_art_core::buffer::Image;
+use xd_art_core::cancel::Cancel;
+use xd_art_core::pipeline::{Pipeline, Report};
 use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Size};
 
 use crate::Marks;
@@ -145,7 +148,27 @@ pub struct Root {
     pub(crate) collapsed: [bool; 7],
     /// The choice whose option list is open.
     pub(crate) open_choice: Option<&'static str>,
+    /// The converted image currently shown.
+    output: Option<Arc<Image>>,
+    /// The source at reduced size, for big images.
+    proxy: Option<Arc<Image>>,
+    /// Identifies the open image in the pipeline's cache.
+    source_id: u64,
+    /// Bumped on every conversion request; results of older requests are dropped.
+    generation: u64,
+    /// The token of the running conversion.
+    cancel: Option<Cancel>,
+    /// The pipeline, used by one background conversion at a time.
+    pipeline: Arc<Mutex<Pipeline>>,
+    /// How long the last shown conversion took, from request to result, and what ran.
+    last_run: Option<(Duration, Report)>,
 }
+
+/// Sources with more pixels than this get a reduced copy that is converted first, so
+/// something shows within a few tens of milliseconds.
+const PROXY_FROM: usize = 1_500_000;
+/// Longest side of the reduced copy.
+const PROXY_SIDE: u32 = 1024;
 
 impl Root {
     /// An empty view with the preferences from `config`; `marks` carries the startup
@@ -183,6 +206,13 @@ impl Root {
             toggles: crate::panels::toggles(),
             collapsed: [false; 7],
             open_choice: None,
+            output: None,
+            proxy: None,
+            source_id: 0,
+            generation: 0,
+            cancel: None,
+            pipeline: Arc::new(Mutex::new(Pipeline::default())),
+            last_run: None,
         }
     }
 
@@ -424,6 +454,76 @@ impl Root {
         );
     }
 
+    /// Converts the open image with the current settings on a background thread. A
+    /// new request cancels the one running; a result that is no longer the latest
+    /// request is never shown. With `quick`, or for a big image the first time, the
+    /// reduced copy is converted first.
+    pub(crate) fn convert(&mut self, quick: bool, cx: &mut Context<Self>) {
+        let Doc::Ready { image, .. } = &self.doc else {
+            return;
+        };
+        let full = image.clone();
+        if let Some(c) = self.cancel.take() {
+            c.cancel();
+        }
+        let cancel = Cancel::new();
+        self.cancel = Some(cancel.clone());
+        self.generation += 1;
+        let generation = self.generation;
+        let settings = self.settings.clone();
+        let pipeline = self.pipeline.clone();
+        let id = self.source_id;
+        // Proxy results use their own id, so they do not evict the full size ones.
+        let proxy = self
+            .proxy
+            .clone()
+            .filter(|_| quick || self.output.is_none());
+        let started = Instant::now();
+        cx.spawn(async move |this, cx| {
+            let mut sources = Vec::new();
+            if let Some(p) = proxy {
+                sources.push((p, id | 1 << 63));
+            }
+            if !quick || sources.is_empty() {
+                sources.push((full, id));
+            }
+            for (src, sid) in sources {
+                let (pipeline, settings, cancel) =
+                    (pipeline.clone(), settings.clone(), cancel.clone());
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let mut p = pipeline
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let report = p.run(&src, sid, &settings, &cancel)?;
+                        Ok::<_, xd_art_core::Error>((report, p.output().cloned()))
+                    })
+                    .await;
+                let shown = this.update(cx, |root, cx| {
+                    if root.generation != generation {
+                        return false;
+                    }
+                    match result {
+                        Ok((report, Some(out))) => {
+                            root.output = Some(Arc::new(out));
+                            root.last_run = Some((started.elapsed(), report));
+                            root.notice = None;
+                        }
+                        Ok((_, None)) | Err(xd_art_core::Error::Cancelled) => return false,
+                        Err(e) => root.notice = Some(e.to_string().into()),
+                    }
+                    cx.notify();
+                    true
+                });
+                if !matches!(shown, Ok(true)) {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// Called after any settings change. `live` is true while a slider is being
     /// dragged, when nothing is written to disk yet.
     pub(crate) fn settings_changed(&mut self, live: bool, cx: &mut Context<Self>) {
@@ -431,6 +531,7 @@ impl Root {
             self.sync_controls(cx);
             self.persist(cx);
         }
+        self.convert(live, cx);
         cx.notify();
     }
 
@@ -527,7 +628,7 @@ impl Root {
             Ok(p) => {
                 self.notice = Some(format!("palette {} ({} colors)", p.name, p.len()).into());
                 self.settings.colors.palette = PaletteSource::Colors(p.colors().to_vec());
-                self.persist(cx);
+                self.settings_changed(false, cx);
             }
             Err(e) => self.notice = Some(e.to_string().into()),
         }
@@ -545,8 +646,7 @@ impl Root {
             Ok(s) => {
                 self.settings = s;
                 self.notice = Some(format!("recipe {}", path.display()).into());
-                self.sync_controls(cx);
-                self.persist(cx);
+                self.settings_changed(false, cx);
             }
             Err(e) => self.notice = Some(e.into()),
         }
@@ -651,13 +751,23 @@ impl Root {
                         root.config.remember(&path);
                         root.persist(cx);
                         root.viewer.fit();
-                        Doc::Ready {
-                            path,
-                            image: Arc::new(image),
-                        }
+                        let image = Arc::new(image);
+                        root.source_id += 1;
+                        root.output = None;
+                        root.proxy = (image.width() as usize * image.height() as usize
+                            > PROXY_FROM)
+                            .then(|| {
+                                let side = image.width().max(image.height());
+                                xd_art_core::io::reduce(&image, side.div_ceil(PROXY_SIDE))
+                                    .ok()
+                                    .map(Arc::new)
+                            })
+                            .flatten();
+                        Doc::Ready { path, image }
                     }
                     Err(e) => Doc::Failed(e.to_string()),
                 };
+                root.convert(false, cx);
                 cx.notify();
             })
             .ok();
@@ -666,8 +776,9 @@ impl Root {
     }
 
     fn image_size(&self) -> Option<(u32, u32)> {
-        match &self.doc {
-            Doc::Ready { image, .. } => Some((image.width(), image.height())),
+        match (&self.output, &self.doc) {
+            (Some(out), _) => Some((out.width(), out.height())),
+            (None, Doc::Ready { image, .. }) => Some((image.width(), image.height())),
             _ => None,
         }
     }
@@ -924,7 +1035,8 @@ impl Root {
             });
         if let Doc::Ready { image, .. } = &self.doc {
             let bg = [t.base.r, t.base.g, t.base.b].map(|v| (v * 255.0).round() as u8);
-            return base.child(self.viewer.element(image.clone(), bg));
+            let shown = self.output.clone().unwrap_or_else(|| image.clone());
+            return base.child(self.viewer.element(shown, bg));
         }
         base.flex()
             .flex_col()
@@ -944,7 +1056,17 @@ impl Root {
 
     fn status_bar(&self, t: Palette) -> impl IntoElement {
         let mut text = match &self.doc {
-            Doc::Ready { image, .. } => format!("{} x {}", image.width(), image.height()),
+            Doc::Ready { image, .. } => match (&self.output, &self.last_run) {
+                (Some(out), Some((took, _))) => format!(
+                    "{} x {} -> {} x {}   {:.0} ms",
+                    image.width(),
+                    image.height(),
+                    out.width(),
+                    out.height(),
+                    took.as_secs_f64() * 1000.0
+                ),
+                _ => format!("{} x {}", image.width(), image.height()),
+            },
             Doc::Loading(_) => "loading".into(),
             Doc::Failed(_) => "error".into(),
             Doc::Empty => String::new(),

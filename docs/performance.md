@@ -190,3 +190,18 @@ Each of those happens the first time it is needed, or never.
 
 Timing of these steps is measured in the startup trace section below, once the trace
 exists.
+
+## Live preview
+
+Every settings change starts a conversion on a background thread. A newer change
+cancels the running one (it stops within a row of work) and results of anything but the
+latest request are dropped, so an older image never replaces a newer one. The pipeline
+cache means only the stages after the change run.
+
+The status bar shows the time from the request to the result being on screen. With
+the 1600x1200 synthetic test image converted to 64x64 with PICO-8 and nearest sampling,
+it read 5 ms right after opening (Windows 11, Ryzen 9 7950X, `fast` profile).
+
+Sources above 1.5 megapixels also get a copy reduced to 1024 pixels on the long side.
+The first conversion of a new image runs on that copy first and shows it, then runs on
+the full image; while a slider is dragged, only the copy is converted.
