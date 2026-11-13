@@ -221,6 +221,33 @@ pub fn alpha(color: Rgba, a: f32) -> Hsla {
     h
 }
 
+/// Whether the system asks for fewer animations. On Windows that is "Show animations in
+/// Windows" turned off (`SPI_GETCLIENTAREAANIMATION`); elsewhere gpui does not expose
+/// the setting, so only the app's own switch (Ctrl+Shift+M) applies. Read once.
+pub fn system_reduced_motion() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(read_system_reduced_motion)
+}
+
+#[cfg(windows)]
+fn read_system_reduced_motion() -> bool {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SystemParametersInfoW(action: u32, param: u32, value: *mut i32, ini: u32) -> i32;
+    }
+    const SPI_GETCLIENTAREAANIMATION: u32 = 0x1042;
+    let mut on: i32 = 1;
+    // SAFETY: for this action the third argument must point to a BOOL (an i32) that the
+    // call writes; `on` is one and lives across the call.
+    let ok = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &raw mut on, 0) };
+    ok != 0 && on == 0
+}
+
+#[cfg(not(windows))]
+fn read_system_reduced_motion() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,5 +316,11 @@ mod tests {
             assert_eq!(Variant::from_index(v.index()), v);
         }
         assert_eq!(Variant::from_index(200), Variant::Dark);
+    }
+
+    #[test]
+    fn system_motion_setting_can_be_read() {
+        // The answer depends on the machine; the call must work and stay the same.
+        assert_eq!(system_reduced_motion(), system_reduced_motion());
     }
 }

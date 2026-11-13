@@ -1,0 +1,7 @@
+{
+  "xd-art": 1,
+  "sample": { "mode": "box", "width": 96, "height": 96 },
+  "colors": { "palette": "pico-8", "metric": "redmean" },
+  "dither": { "mode": "bayer4x4", "amount": 0.35 },
+  "output": { "scale": 3 }
+}

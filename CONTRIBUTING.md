@@ -1,5 +1,46 @@
 # Contributing
 
+Issues and pull requests are welcome: bugs, results that look wrong next to the
+original program, missing palettes with a clear license, translations, gallery entries.
+
+## Building and checking
+
+`docs/building.md` has what each system needs. Before sending a change:
+
+```sh
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+```
+
+The CI runs the same on Linux and Windows, plus the browser build and a speed check
+(`docs/performance.md`).
+
+## How the code is written
+
+- Plain, direct Rust. Comments say why, not what. No `unsafe` unless there is no other
+  way, and then with a `// SAFETY:` comment (the lints enforce it).
+- Engine code returns `Result` with a message a user can act on; it never panics on bad
+  input.
+- Anything that changes pixels needs a test. For options the original program has, the
+  golden tests compare against its output (`scripts/gen-goldens.sh` makes the reference
+  files from its sources).
+- A change that could be slower comes with a benchmark number from
+  `cargo bench -p xd-art-bench`, measured, not guessed.
+- Interface text goes through `tr()` (see below).
+
+## Commits
+
+Conventional Commits in English: `feat(core): add ...`, `fix(gui): ...`, `docs: ...`,
+imperative, at most 72 characters, no period. A short body when the reason is not
+obvious. One logical change per commit.
+
+## Decisions
+
+When you choose between options that someone might question later, add a short entry
+to `docs/decisions.md`: what was chosen and why.
+
 ## Adding a language
 
 The interface text lives in `crates/xd-art-text`. English is the language of the

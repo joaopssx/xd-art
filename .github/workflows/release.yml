@@ -1,0 +1,86 @@
+name: release
+
+# Runs when a version tag like v0.1.0 is pushed: builds the app and the command line
+# tool for each platform below, packs them with the license, the README and the
+# launcher files, writes SHA-256 checksums and attaches everything to a GitHub release
+# for that tag. Nothing runs on normal pushes. See "Releases" in docs/building.md.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      # One platform failing (macOS is the least tested) should not stop the others.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: system libraries for gpui (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+      - run: rustup show
+      - run: cargo build --release --locked -p xd-art-gui -p xd-art-cli --target ${{ matrix.target }}
+      - name: pack
+        shell: bash
+        run: |
+          name="xd-art-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          bin="target/${{ matrix.target }}/release"
+          ext=""
+          if [ "${{ runner.os }}" = "Windows" ]; then ext=".exe"; fi
+          cp "$bin/xd-art$ext" "$bin/xd-art-cli$ext" "dist/$name/"
+          cp LICENSE README.md README.pt-BR.md "dist/$name/"
+          cp -r integration "dist/$name/"
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+          else
+            tar czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*.${{ matrix.archive }}
+
+  release:
+    needs: build
+    # Publish whatever was built, even if one platform failed.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        working-directory: dist
+        run: sha256sum xd-art-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "xd-art $GITHUB_REF_NAME" \
+            --notes "Binaries for Windows, Linux and macOS. Check them against SHA256SUMS.txt; see docs/building.md."

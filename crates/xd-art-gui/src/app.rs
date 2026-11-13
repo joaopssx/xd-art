@@ -1230,11 +1230,13 @@ impl Root {
             },
             self.panel_opened as usize,
         );
-        let animation = Animation::new(if self.config.reduced_motion {
-            Duration::ZERO
-        } else {
-            TRANSITION
-        })
+        let animation = Animation::new(
+            if self.config.reduced_motion || theme::system_reduced_motion() {
+                Duration::ZERO
+            } else {
+                TRANSITION
+            },
+        )
         .with_easing(ease_out_quint());
         row.with_animation(id, animation, |el, d| el.opacity(d))
     }
