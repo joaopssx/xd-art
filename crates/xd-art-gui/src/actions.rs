@@ -3,7 +3,7 @@
 //! Actions are bound here and handled by the root view. The command palette and the
 //! shortcut sheet read [`SHORTCUTS`] so what they show cannot drift from what is bound.
 
-use gpui::{App, KeyBinding, actions};
+use gpui::{Action, App, KeyBinding, actions};
 
 actions!(
     xd_art,
@@ -36,6 +36,10 @@ actions!(
         Variations,
         /// Keep the current settings as a variation.
         KeepVariation,
+        /// Search and run any command.
+        CommandPalette,
+        /// List every shortcut.
+        ShortcutSheet,
     ]
 );
 
@@ -66,7 +70,31 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
         "cmd-shift-e",
         "keep current settings as a variation",
     ),
+    ("ctrl-k", "cmd-k", "command palette"),
+    ("ctrl-/", "cmd-/", "list every shortcut"),
 ];
+
+/// The action of [`SHORTCUTS`] entry `i`, to run it from the command palette.
+pub fn command(i: usize) -> Box<dyn Action> {
+    match i {
+        0 => Box::new(Open),
+        1 => Box::new(ToggleLeft),
+        2 => Box::new(ToggleRight),
+        3 => Box::new(Fit),
+        4 => Box::new(ActualSize),
+        5 => Box::new(ZoomIn),
+        6 => Box::new(ZoomOut),
+        7 => Box::new(ToggleGrid),
+        8 => Box::new(Compare),
+        9 => Box::new(Gallery),
+        10 => Box::new(Undo),
+        11 => Box::new(Redo),
+        12 => Box::new(Variations),
+        13 => Box::new(KeepVariation),
+        14 => Box::new(CommandPalette),
+        _ => Box::new(ShortcutSheet),
+    }
+}
 
 /// Binds every shortcut.
 pub fn bind(cx: &mut App) {
@@ -89,5 +117,20 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(11), Redo, c),
         KeyBinding::new(k(12), Variations, c),
         KeyBinding::new(k(13), KeepVariation, c),
+        KeyBinding::new(k(14), CommandPalette, c),
+        KeyBinding::new(k(15), ShortcutSheet, c),
     ]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_shortcut_has_a_command() {
+        // command() falls through to the last action, so the list and the match have
+        // to stay the same length; the names make a mismatch obvious.
+        assert_eq!(command(SHORTCUTS.len() - 1).name(), ShortcutSheet.name());
+        assert_eq!(command(0).name(), Open.name());
+    }
 }

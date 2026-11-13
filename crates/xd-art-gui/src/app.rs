@@ -19,8 +19,8 @@ use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Siz
 
 use crate::Marks;
 use crate::actions::{
-    self, ActualSize, Compare, Fit, Gallery, KeepVariation, Open, Redo, ToggleGrid, ToggleLeft,
-    ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
+    self, ActualSize, CommandPalette, Compare, Fit, Gallery, KeepVariation, Open, Redo,
+    ShortcutSheet, ToggleGrid, ToggleLeft, ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
@@ -178,6 +178,8 @@ pub struct Root {
     pub(crate) restoring: bool,
     /// Versions side by side.
     pub(crate) variations: crate::variations::Variations,
+    /// Command palette and shortcut sheet.
+    pub(crate) commands: crate::commands::Commands,
 }
 
 /// Wait after the last change before the exact conversion starts, so a burst of
@@ -239,6 +241,7 @@ impl Root {
             history: History::default(),
             restoring: false,
             variations: crate::variations::Variations::default(),
+            commands: crate::commands::Commands::default(),
         }
     }
 
@@ -1335,6 +1338,7 @@ impl Render for Root {
         }
         div()
             .id("root")
+            .relative()
             .track_focus(&self.focus)
             .key_context(actions::CONTEXT)
             .on_action(cx.listener(|this, _: &Open, window, cx| this.prompt_open(window, cx)))
@@ -1359,6 +1363,19 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Gallery, _, cx| this.toggle_gallery(cx)))
+            .on_action(cx.listener(|this, _: &CommandPalette, _, cx| {
+                this.commands.open = !this.commands.open;
+                this.commands.sheet = false;
+                this.commands.query.clear();
+                this.commands.selected = 0;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ShortcutSheet, _, cx| {
+                this.commands.sheet = !this.commands.sheet;
+                this.commands.open = false;
+                cx.notify();
+            }))
+            .capture_key_down(cx.listener(Self::command_key))
             .on_action(cx.listener(|this, _: &Variations, _, cx| {
                 this.variations.open = !this.variations.open;
                 cx.notify();
@@ -1426,6 +1443,8 @@ impl Render for Root {
             .child(middle)
             .child(self.status_bar(t, cx))
             .child(Self::footer(t, cx))
+            .when(self.commands.open, |d| d.child(self.command_palette(t, cx)))
+            .when(self.commands.sheet, |d| d.child(self.shortcut_sheet(t)))
     }
 }
 
