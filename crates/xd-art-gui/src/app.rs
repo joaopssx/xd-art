@@ -12,7 +12,7 @@ use gpui::{
     SharedString, Subscription, Window, div, prelude::*, px, svg,
 };
 use xd_art_core::buffer::Image;
-use xd_art_core::settings::{PaletteSource, Settings};
+use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Size};
 
 use crate::Marks;
 use crate::actions::{
@@ -20,6 +20,7 @@ use crate::actions::{
 };
 use crate::assets::icon;
 use crate::config::Config;
+use crate::panels::{Choice, Section, Toggle};
 use crate::preview::Viewer;
 use crate::theme::{self, Palette, Theme};
 use crate::widgets::{Slider, SliderEvent, SliderSpec};
@@ -114,6 +115,10 @@ pub struct Control {
     pub apply: fn(&mut Settings, f32),
     /// Reads the value from the settings.
     pub read: fn(&Settings) -> f32,
+    /// Section of the settings panel it is in.
+    pub section: Section,
+    /// Whether it has an effect with the current settings.
+    pub visible: fn(&Settings) -> bool,
     _sub: Subscription,
 }
 
@@ -126,14 +131,20 @@ pub struct Root {
     resizing: Option<Side>,
     focus: FocusHandle,
     config: Config,
-    settings: Settings,
+    pub(crate) settings: Settings,
     /// One line for the status bar: what just happened.
     notice: Option<SharedString>,
     /// Bumped on every config change; a pending write only goes ahead if it is still
     /// the latest.
     save_generation: u64,
     viewer: Viewer,
-    controls: Vec<Control>,
+    pub(crate) controls: Vec<Control>,
+    pub(crate) choices: Vec<Choice>,
+    pub(crate) toggles: Vec<Toggle>,
+    /// Collapsed sections of the settings panel, indexed like [`Section::ALL`].
+    pub(crate) collapsed: [bool; 7],
+    /// The choice whose option list is open.
+    pub(crate) open_choice: Option<&'static str>,
 }
 
 impl Root {
@@ -168,15 +179,20 @@ impl Root {
             save_generation: 0,
             viewer: Viewer::default(),
             controls: Vec::new(),
+            choices: crate::panels::choices(),
+            toggles: crate::panels::toggles(),
+            collapsed: [false; 7],
+            open_choice: None,
         }
     }
 
     /// Adds a slider for one setting.
     fn control(
         &mut self,
-        spec: SliderSpec,
+        (section, spec): (Section, SliderSpec),
         read: fn(&Settings) -> f32,
         apply: fn(&mut Settings, f32),
+        visible: fn(&Settings) -> bool,
         cx: &mut Context<Self>,
     ) {
         let start = read(&self.settings);
@@ -184,57 +200,265 @@ impl Root {
         let sub = cx.subscribe(&slider, move |this, _, e: &SliderEvent, cx| {
             let SliderEvent::Changed { value, live } = *e;
             apply(&mut this.settings, value);
-            if !live {
-                this.persist(cx);
-            }
-            cx.notify();
+            this.settings_changed(live, cx);
         });
         self.controls.push(Control {
             slider,
             apply,
             read,
+            section,
+            visible,
             _sub: sub,
         });
     }
 
     /// Builds the sliders. Kept apart from `new` because creating entities needs the
     /// view's own context.
+    #[allow(clippy::too_many_lines)] // one line per slider, the list is the point
     pub fn build_controls(&mut self, cx: &mut Context<Self>) {
-        let spec = |label: &str, min: f32, max: f32, step: f32, default: f32, decimals: usize| {
-            SliderSpec {
-                label: label.to_string().into(),
-                min,
-                max,
-                step,
-                default,
-                unit: "",
-                decimals,
-            }
+        use Section::{Color, Dithering, Output, Post, Prepare, Sampling};
+        let spec = |section: Section,
+                    label: &str,
+                    (min, max, step): (f32, f32, f32),
+                    default: f32,
+                    decimals: usize| {
+            (
+                section,
+                SliderSpec {
+                    label: label.to_string().into(),
+                    min,
+                    max,
+                    step,
+                    default,
+                    unit: "",
+                    decimals,
+                },
+            )
         };
+        let always = |_: &Settings| true;
+        let absolute = |s: &Settings| matches!(s.sample.size, Size::Absolute { .. });
+        let relative = |s: &Settings| matches!(s.sample.size, Size::Relative { .. });
         self.control(
-            spec("brightness", -1.0, 1.0, 0.01, 0.0, 2),
+            spec(Prepare, "blur", (0.0, 32.0, 0.25), 0.0, 2),
+            |s| s.blur.radius,
+            |s, v| s.blur.radius = v,
+            always,
+            cx,
+        );
+        self.control(
+            spec(Prepare, "box blur from", (1.0, 32.0, 0.5), 5.0, 1),
+            |s| s.blur.box_from,
+            |s, v| s.blur.box_from = v,
+            |s| s.blur.radius > 0.0 && !s.blur.box_approx,
+            cx,
+        );
+        self.control(
+            spec(Sampling, "width", (1.0, 512.0, 1.0), 64.0, 0),
+            |s| match s.sample.size {
+                Size::Absolute { width, .. } => width as f32,
+                Size::Relative { .. } => 64.0,
+            },
+            |s, v| {
+                if let Size::Absolute { width, .. } = &mut s.sample.size {
+                    *width = v as u32;
+                }
+            },
+            absolute,
+            cx,
+        );
+        self.control(
+            spec(Sampling, "height", (1.0, 512.0, 1.0), 64.0, 0),
+            |s| match s.sample.size {
+                Size::Absolute { height, .. } => height as f32,
+                Size::Relative { .. } => 64.0,
+            },
+            |s, v| {
+                if let Size::Absolute { height, .. } = &mut s.sample.size {
+                    *height = v as u32;
+                }
+            },
+            |s| {
+                matches!(
+                    s.sample.size,
+                    Size::Absolute {
+                        keep_aspect: false,
+                        ..
+                    }
+                )
+            },
+            cx,
+        );
+        self.control(
+            spec(Sampling, "divide by", (1.0, 32.0, 1.0), 4.0, 0),
+            |s| match s.sample.size {
+                Size::Relative { x, .. } => x as f32,
+                Size::Absolute { .. } => 4.0,
+            },
+            |s, v| {
+                if let Size::Relative { x, y } = &mut s.sample.size {
+                    *x = v as u32;
+                    *y = v as u32;
+                }
+            },
+            relative,
+            cx,
+        );
+        self.control(
+            spec(Sampling, "offset x", (-1.0, 1.0, 0.01), 0.0, 2),
+            |s| s.sample.offset_x,
+            |s, v| s.sample.offset_x = v,
+            always,
+            cx,
+        );
+        self.control(
+            spec(Sampling, "offset y", (-1.0, 1.0, 0.01), 0.0, 2),
+            |s| s.sample.offset_y,
+            |s, v| s.sample.offset_y = v,
+            always,
+            cx,
+        );
+        self.control(
+            spec(Sampling, "edge strength", (0.0, 1.0, 0.01), 0.6, 2),
+            |s| s.sample.edge_strength,
+            |s, v| s.sample.edge_strength = v,
+            |s| s.sample.mode == SampleMode::Edge,
+            cx,
+        );
+        self.control(
+            spec(Color, "sharpen", (0.0, 4.0, 0.05), 0.0, 2),
+            |s| s.adjust.sharpen,
+            |s, v| s.adjust.sharpen = v,
+            always,
+            cx,
+        );
+        self.control(
+            spec(Color, "brightness", (-1.0, 1.0, 0.01), 0.0, 2),
             |s| s.adjust.brightness,
             |s, v| s.adjust.brightness = v,
+            always,
             cx,
         );
         self.control(
-            spec("contrast", 0.0, 3.0, 0.01, 1.0, 2),
+            spec(Color, "contrast", (0.0, 3.0, 0.01), 1.0, 2),
             |s| s.adjust.contrast,
             |s, v| s.adjust.contrast = v,
+            always,
             cx,
         );
         self.control(
-            spec("saturation", 0.0, 3.0, 0.01, 1.0, 2),
+            spec(Color, "saturation", (0.0, 3.0, 0.01), 1.0, 2),
             |s| s.adjust.saturation,
             |s, v| s.adjust.saturation = v,
+            always,
             cx,
         );
         self.control(
-            spec("gamma", 0.1, 4.0, 0.01, 1.0, 2),
-            |s| s.adjust.gamma,
-            |s, v| s.adjust.gamma = v,
+            spec(Color, "hue", (-180.0, 180.0, 1.0), 0.0, 0),
+            |s| s.adjust.hue,
+            |s, v| s.adjust.hue = v,
+            always,
             cx,
         );
+        self.control(
+            spec(Color, "gamma", (0.1, 4.0, 0.01), 1.0, 2),
+            |s| s.adjust.gamma,
+            |s, v| s.adjust.gamma = v,
+            always,
+            cx,
+        );
+        self.control(
+            spec(Color, "tint strength", (0.0, 1.0, 0.01), 1.0, 2),
+            |s| s.adjust.tint_strength,
+            |s, v| s.adjust.tint_strength = v,
+            |s| s.adjust.tint != [255; 3],
+            cx,
+        );
+        self.control(
+            spec(Color, "colors", (2.0, 64.0, 1.0), 16.0, 0),
+            |s| match &s.colors.palette {
+                PaletteSource::Extract { count, .. } => f32::from(*count),
+                _ => 16.0,
+            },
+            |s, v| {
+                if let PaletteSource::Extract { count, .. } = &mut s.colors.palette {
+                    *count = v as u16;
+                }
+            },
+            |s| matches!(s.colors.palette, PaletteSource::Extract { .. }),
+            cx,
+        );
+        self.control(
+            spec(Dithering, "amount", (0.0, 1.0, 0.01), 0.2, 2),
+            |s| s.dither.amount,
+            |s, v| s.dither.amount = v,
+            |s| s.dither.mode.is_ordered(),
+            cx,
+        );
+        self.control(
+            spec(Dithering, "alpha threshold", (0.0, 255.0, 1.0), 128.0, 0),
+            |s| f32::from(s.dither.alpha_threshold),
+            |s, v| s.dither.alpha_threshold = v as u8,
+            always,
+            cx,
+        );
+        self.control(
+            spec(Dithering, "target colors", (2.0, 64.0, 1.0), 8.0, 0),
+            |s| f32::from(s.dither.target_colors),
+            |s, v| s.dither.target_colors = v as u16,
+            |s| s.dither.mode == DitherMode::MedianCut,
+            cx,
+        );
+        self.control(
+            spec(Post, "merge colors closer than", (0.0, 64.0, 1.0), 0.0, 0),
+            |s| f32::from(s.post.merge),
+            |s, v| s.post.merge = v as u8,
+            always,
+            cx,
+        );
+        self.control(
+            spec(Output, "scale", (1.0, 16.0, 1.0), 1.0, 0),
+            |s| s.output.scale as f32,
+            |s, v| s.output.scale = v as u32,
+            always,
+            cx,
+        );
+    }
+
+    /// Called after any settings change. `live` is true while a slider is being
+    /// dragged, when nothing is written to disk yet.
+    pub(crate) fn settings_changed(&mut self, live: bool, cx: &mut Context<Self>) {
+        if !live {
+            self.sync_controls(cx);
+            self.persist(cx);
+        }
+        cx.notify();
+    }
+
+    /// Source size rows for the Input section.
+    pub(crate) fn input_rows(&self, t: Palette) -> Vec<AnyElement> {
+        let row = |k: &str, v: String| {
+            div()
+                .flex()
+                .justify_between()
+                .text_size(theme::size::body())
+                .child(div().text_color(t.muted).child(k.to_string()))
+                .child(div().font(theme::number_font()).text_color(t.text).child(v))
+                .into_any_element()
+        };
+        match &self.doc {
+            Doc::Ready { image, .. } => vec![
+                row("size", format!("{} x {}", image.width(), image.height())),
+                row(
+                    "transparency",
+                    if image.alpha().is_some() {
+                        "yes".into()
+                    } else {
+                        "no".into()
+                    },
+                ),
+            ],
+            _ => vec![row("size", "no image".into())],
+        }
     }
 
     /// Puts the settings back into every slider, after a recipe or palette changed them.
@@ -602,8 +826,13 @@ impl Root {
             .bg(t.panel)
             .p_3()
             .gap_2()
+            .id(match side {
+                Side::Left => "left-body",
+                Side::Right => "right-body",
+            })
+            .overflow_y_scroll()
             .children(match side {
-                Side::Left => self.left_contents(t),
+                Side::Left => self.settings_panel(t, cx),
                 Side::Right => self.right_contents(t),
             });
         let row = div().h_full().flex().flex_none();
@@ -619,43 +848,6 @@ impl Root {
                 .child(handle)
                 .child(body),
         }
-    }
-
-    fn left_contents(&self, t: Palette) -> Vec<AnyElement> {
-        let mut out: Vec<AnyElement> = self
-            .controls
-            .iter()
-            .map(|c| c.slider.clone().into_any_element())
-            .collect();
-        out.extend(
-            [
-                "Input",
-                "Prepare",
-                "Sampling",
-                "Color",
-                "Dithering",
-                "Post",
-                "Output",
-            ]
-            .into_iter()
-            .map(|name| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_size(theme::size::title())
-                    .text_color(t.text)
-                    .child(
-                        svg()
-                            .path(icon("chevron-right"))
-                            .size(px(12.0))
-                            .text_color(t.muted),
-                    )
-                    .child(name)
-                    .into_any_element()
-            }),
-        );
-        out
     }
 
     fn right_contents(&self, t: Palette) -> Vec<AnyElement> {
