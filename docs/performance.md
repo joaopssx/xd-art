@@ -164,6 +164,30 @@ pixel receives its error the same as in the one thread loop. The result is ident
 (a test compares 1, 3 and 8 threads for every mode on a 320x240 image), and the speedup
 is lower than for the ordered modes because rows wait on each other.
 
+## Speed check
+
+```sh
+cargo run --release -p xd-art-bench --example speed_check
+```
+
+Five whole conversions, each on one thread with an empty pipeline cache, median of 7.
+The CI workflow runs it on every push and compares the medians with
+`crates/xd-art-bench/speed-budget.txt`. Medians on the development machine (three runs
+gave the same values within 0.5 ms) and the budgets, about four times as much:
+
+| case | source | median here | budget |
+|---|---|---|---|
+| nearest-160x90 | 1920x1080 | 4.2 ms | 17 ms |
+| lanczos-960x540 | 1920x1080 | 80.0 ms | 320 ms |
+| blur8-160x90 (blur radius 8, nearest) | 1920x1080 | 71.6 ms | 290 ms |
+| bayer4-640x480 | 640x480 | 37.5 ms | 150 ms |
+| floyd-640x480 | 640x480 | 46.0 ms | 185 ms |
+
+The CI job does not fail the build when a case goes over: shared runners can be two or
+three times slower than a desktop and vary between runs. A case over budget shows up as
+a failed (but allowed) job, which is the cue to run the criterion benches locally. If
+the runners turn out steady enough, removing `continue-on-error` makes it blocking.
+
 ## GPU path (evaluated, not built)
 
 ```sh

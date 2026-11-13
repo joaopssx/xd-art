@@ -1,0 +1,7 @@
+# Speed budgets for examples/speed_check.rs: case name, then the most milliseconds its
+# median may take on one thread. See docs/performance.md, "Speed check".
+nearest-160x90    17
+lanczos-960x540   320
+blur8-160x90      290
+bayer4-640x480    150
+floyd-640x480     185

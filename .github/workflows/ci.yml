@@ -44,3 +44,17 @@ jobs:
       - run: rustup show
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+
+  # Compares a few whole conversions with crates/xd-art-bench/speed-budget.txt. Shared
+  # runners vary a lot from run to run, so a slow result is reported but does not fail
+  # the build; the budgets are about four times the development machine's times and
+  # only catch a change that makes something several times slower. See the "Speed
+  # check" section of docs/performance.md.
+  speed:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup show
+      - run: cargo run --release -p xd-art-bench --example speed_check
