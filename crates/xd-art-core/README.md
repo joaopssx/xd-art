@@ -6,6 +6,22 @@ without dithering, then post-process.
 
 It has no user interface code and can be used on its own.
 
+```rust
+use xd_art_core::{cancel::Cancel, pipeline::Pipeline, settings::Settings};
+
+fn main() -> xd_art_core::Result<()> {
+    let image = xd_art_core::io::load("photo.jpg".as_ref())?;
+    let mut pipeline = Pipeline::default();
+    pipeline.run(&image, 1, &Settings::default(), &Cancel::new())?;
+    xd_art_core::io::save(pipeline.output().unwrap(), "pixel.png".as_ref())?;
+    Ok(())
+}
+```
+
+`examples/convert.rs` is the same with a recipe file. Settings, recipes, palettes,
+presets and the exporters are documented on docs.rs; the main repository has the
+command line tool, the desktop interface and longer guides in `docs/`.
+
 ## Features
 
 | feature | default | what it does |

@@ -274,3 +274,32 @@ becomes a problem.
 
 Running the module for the first time found a real bug: `Instant::now` panics on
 `wasm32-unknown-unknown`. The pipeline now leaves stage times at zero there.
+
+## 2026-11-13: engine crate ready to publish, dependency audit (E11, S9)
+
+`xd-art-core` has the metadata crates.io needs, a README, an example
+(`cargo run -p xd-art-core --example convert -- in.png out.png [recipe.json]`) and doc
+examples on the main entry points. `cargo publish -p xd-art-core --dry-run` passes:
+28 files, 351.7 KiB (96.0 KiB compressed). The package leaves out `tests/`: the golden
+files come from the original program and only make sense in the repository. Nothing is
+published; whether to publish is the owner's call.
+
+Dependencies of the engine (`cargo tree -p xd-art-core -e normal`, unique crates
+including itself):
+
+| features | crates |
+|---|---|
+| none (`--no-default-features`, the web build) | 21 |
+| default (`parallel`, `gif`, `qoi`, `serde`) | 35 |
+| all (adds `online-palettes`: ureq with rustls) | 56 |
+
+Every direct dependency is used: `image` (decoding and most encoders), `png` (indexed
+PNG, which `image` cannot write), `gif`, `rayon`, `serde_json`, `ureq`. The only
+duplicate is `miniz_oxide` 0.8 and 0.9, both pulled in by `png` itself. `image` brings
+`moxcms` and `pxfm` for color management whether or not they are needed; they cannot
+be turned off in 0.25. Nothing was removed: there was nothing unused to remove.
+`cargo-udeps` and `cargo-bloat` are not installed here, so the check was done by
+reading the tree and searching the sources for each crate.
+
+Release binaries on Windows: `xd-art.exe` (interface) 9.8 MB, `xd-art-cli.exe` 2.2 MB.
+Most of the interface is gpui.

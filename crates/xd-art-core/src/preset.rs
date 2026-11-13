@@ -174,6 +174,12 @@ fn blocks(s: &mut Settings, size: u32) {
 }
 
 /// A preset by name.
+///
+/// ```
+/// let p = xd_art_core::preset::find("game-boy").expect("a built-in preset");
+/// let settings = p.settings();
+/// assert_eq!(settings.dither.mode.name(), "bayer4x4");
+/// ```
 #[must_use]
 pub fn find(name: &str) -> Option<&'static Preset> {
     PRESETS.iter().find(|p| p.name == name)

@@ -541,6 +541,12 @@ pub fn builtin_names() -> impl Iterator<Item = &'static str> {
 }
 
 /// Builds a built-in palette by name.
+///
+/// ```
+/// let p = xd_art_core::palette::builtin("pico-8").expect("pico-8 is built in");
+/// assert_eq!(p.len(), 16);
+/// assert!(xd_art_core::palette::builtin("no such palette").is_none());
+/// ```
 #[must_use]
 pub fn builtin(name: &str) -> Option<Palette> {
     let b = BUILTINS.iter().find(|b| b.name == name)?;

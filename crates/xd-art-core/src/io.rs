@@ -111,6 +111,12 @@ pub struct Loaded {
 
 /// Loads an image with the default limits.
 ///
+/// ```no_run
+/// let img = xd_art_core::io::load(std::path::Path::new("photo.jpg"))?;
+/// println!("{} x {}", img.width(), img.height());
+/// # Ok::<(), xd_art_core::Error>(())
+/// ```
+///
 /// # Errors
 ///
 /// Fails when the file cannot be read or decoded.
@@ -268,6 +274,17 @@ pub fn reduce(img: &Image, factor: u32) -> Result<Image> {
 }
 
 /// Encodes to bytes.
+///
+/// ```
+/// use xd_art_core::buffer::Image;
+/// use xd_art_core::io::{self, Format, LoadOptions};
+///
+/// let img = Image::new(4, 2, [10, 20, 30])?;
+/// let png = io::encode(&img, Format::Png)?;
+/// let back = io::decode_with(&png, &LoadOptions::default())?.image;
+/// assert_eq!(back.get(3, 1), Some([10, 20, 30, 255]));
+/// # Ok::<(), xd_art_core::Error>(())
+/// ```
 ///
 /// # Errors
 ///
