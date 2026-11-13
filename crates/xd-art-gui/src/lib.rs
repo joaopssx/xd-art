@@ -11,6 +11,7 @@ pub mod app;
 pub mod assets;
 pub mod commands;
 pub mod config;
+pub mod frames;
 pub mod gallery;
 pub mod history;
 pub mod panels;

@@ -187,6 +187,8 @@ pub struct Root {
     pub(crate) edge_hover: bool,
     /// Bumped every time a panel opens, so its fade in starts over.
     pub(crate) panel_opened: u32,
+    /// Frames of an animated GIF; empty for still images.
+    pub(crate) frames: crate::frames::Frames,
 }
 
 /// Length of interface transitions.
@@ -255,6 +257,7 @@ impl Root {
             fullscreen: false,
             edge_hover: false,
             panel_opened: 0,
+            frames: crate::frames::Frames::default(),
         }
     }
 
@@ -874,11 +877,15 @@ impl Root {
             let load = path.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { xd_art_core::io::load(&load) })
+                .spawn(async move { load_any(&load) })
                 .await;
             this.update(cx, |root, cx| {
                 root.doc = match result {
-                    Ok(image) => {
+                    Ok((image, frames)) => {
+                        root.frames = crate::frames::Frames {
+                            list: frames,
+                            ..Default::default()
+                        };
                         root.marks.image.get_or_insert_with(Instant::now);
                         root.config.remember(&path);
                         root.persist(cx);
@@ -1318,6 +1325,35 @@ impl Root {
     }
 }
 
+/// Loads a still image, or the frames of a GIF (the first frame is returned as the
+/// image too).
+fn load_any(path: &std::path::Path) -> xd_art_core::Result<(Image, Vec<crate::frames::Frame>)> {
+    if kind(path) == Kind::Image
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("gif"))
+    {
+        let a = xd_art_core::anim::load_gif(path)?;
+        let frames: Vec<crate::frames::Frame> = a
+            .frames
+            .into_iter()
+            .map(|f| crate::frames::Frame {
+                image: Arc::new(f.image),
+                delay: f.delay,
+                skip: false,
+            })
+            .collect();
+        let first = frames
+            .first()
+            .map(|f| (*f.image).clone())
+            .ok_or(xd_art_core::Error::Cancelled)?;
+        let frames = if frames.len() > 1 { frames } else { Vec::new() };
+        return Ok((first, frames));
+    }
+    Ok((xd_art_core::io::load(path)?, Vec::new()))
+}
+
 /// What the status bar says about an open image: sizes, colors, dither mode, time of
 /// each stage that ran, and the memory held by the image, the result and the cache.
 fn status_parts(image: &Image, out: Option<&Image>, root: &Root) -> Vec<String> {
@@ -1406,6 +1442,9 @@ impl Render for Root {
                 .flex()
                 .flex_col()
                 .child(self.preview(t, cx))
+                .when(!self.frames.list.is_empty() && !image_only, |d| {
+                    d.child(self.frame_strip(t, cx))
+                })
                 .when(self.output.is_some() && !image_only, |d| {
                     d.child(self.palette_strip(t, cx))
                 }),
