@@ -7067,6 +7067,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "xd-art-wasm"
+version = "0.1.0"
+dependencies = [
+ "wasm-bindgen",
+ "xd-art-core",
+]
+
+[[package]]
 name = "xim-ctext"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

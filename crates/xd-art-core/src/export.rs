@@ -384,6 +384,7 @@ pub fn handoff(
         })?;
         Ok(path)
     };
+    #[cfg_attr(not(feature = "serde"), allow(unused_mut))]
     let mut files = vec![
         write(format!("{stem}.png"), &indexed_png(ix, palette.colors())?)?,
         write(format!("{stem}.gpl"), palette.to_gpl().as_bytes())?,

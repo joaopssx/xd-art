@@ -262,3 +262,15 @@ drops the image and the caches instead; Ctrl+Q quits. A `resident.txt` left behi
 crash only costs the next launch a failed connection before it starts its own instance.
 The config file is now read before gpui starts, since resident mode has to decide
 whether to start gpui at all; it is a read of a few hundred bytes (0.09 ms).
+
+## 2026-11-13: web build (E14)
+
+The browser build is a separate crate with three functions and a page without a
+framework or bundler: it has to keep working without anyone maintaining a JavaScript
+toolchain. It converts on the main thread; the page waits 60 ms after the last change
+before converting, and a 64x64 result from a 1920x1080 photo took 39 ms in Node. A Web
+Worker would keep the page responsive for big outputs and is the next step if that
+becomes a problem.
+
+Running the module for the first time found a real bug: `Instant::now` panics on
+`wasm32-unknown-unknown`. The pipeline now leaves stage times at zero there.

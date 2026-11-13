@@ -18,7 +18,7 @@
 //! is served from memory. [`CachePolicy`] bounds how much that may hold.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::buffer::{Image, Indexed, Work};
 use crate::cancel::Cancel;
@@ -227,8 +227,24 @@ pub struct Report {
     pub ran: StageSet,
     /// Stages restored from older results.
     pub restored: StageSet,
-    /// Time spent in each computed stage, indexed like [`Stage::ALL`].
+    /// Time spent in each computed stage, indexed like [`Stage::ALL`]. Always zero in
+    /// the browser build, which has no clock.
     pub times: [Duration; 7],
+}
+
+/// Runs `f` and measures it. `Instant::now` panics on `wasm32-unknown-unknown`, which
+/// has no clock, so there the time is zero.
+fn timed<T>(f: impl FnOnce() -> T) -> (T, Duration) {
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    {
+        (f(), Duration::ZERO)
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    {
+        let start = std::time::Instant::now();
+        let v = f();
+        (v, start.elapsed())
+    }
 }
 
 /// Read access to the source and to the stages that already ran.
@@ -463,9 +479,9 @@ impl Pipeline {
                     pool: &self.pool,
                     cancel,
                 };
-                let start = Instant::now();
-                let data = exec(stage, &inputs, s)?;
-                report.times[i] = start.elapsed();
+                let (data, took) = timed(|| exec(stage, &inputs, s));
+                let data = data?;
+                report.times[i] = took;
                 report.ran.insert(stage);
                 Arc::new(data)
             };

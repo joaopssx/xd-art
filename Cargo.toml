@@ -33,6 +33,12 @@ codegen-units = 16
 incremental = true
 strip = false
 
+# The browser build (crates/xd-art-wasm). wasm-bindgen reads a custom section that
+# `strip` would remove, so this profile keeps it.
+[profile.wasm]
+inherits = "release"
+strip = false
+
 # Debug builds decode and resize images with optimized dependencies, otherwise
 # opening a large PNG in a debug build takes seconds.
 [profile.dev.package."*"]

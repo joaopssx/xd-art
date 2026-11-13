@@ -45,6 +45,17 @@ jobs:
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
 
+  # The engine without default features, as the browser build uses it, and the wasm
+  # crate itself. See docs/web.md.
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo clippy -p xd-art-core --no-default-features --all-targets
+      - run: cargo build -p xd-art-wasm --target wasm32-unknown-unknown --profile wasm
+
   # Compares a few whole conversions with crates/xd-art-bench/speed-budget.txt. Shared
   # runners vary a lot from run to run, so a slow result is reported but does not fail
   # the build; the budgets are about four times the development machine's times and
