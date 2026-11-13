@@ -4,10 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use gpui::{Context, Window, div, prelude::*, rgb};
+use gpui::{Context, Window, div, prelude::*, svg};
 use xd_art_core::buffer::Image;
 
 use crate::Marks;
+use crate::assets::icon;
+use crate::theme::{self, Theme};
 
 /// What the window is showing.
 pub enum Doc {
@@ -16,7 +18,12 @@ pub enum Doc {
     /// A file is being decoded.
     Loading(PathBuf),
     /// A decoded image.
-    Ready { path: PathBuf, image: Arc<Image> },
+    Ready {
+        /// Where it came from.
+        path: PathBuf,
+        /// The pixels.
+        image: Arc<Image>,
+    },
     /// Opening failed.
     Failed(String),
 }
@@ -28,6 +35,7 @@ pub struct Root {
 }
 
 impl Root {
+    /// An empty view; `marks` carries the startup times so far.
     pub fn new(mut marks: Marks) -> Self {
         marks.window = Some(Instant::now());
         Self {
@@ -71,7 +79,8 @@ impl Root {
 }
 
 impl Render for Root {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get(cx).c;
         let text = match &self.doc {
             Doc::Empty => "drop an image here".to_string(),
             Doc::Loading(p) => format!("opening {}", p.display()),
@@ -83,10 +92,15 @@ impl Render for Root {
         div()
             .size_full()
             .flex()
+            .flex_col()
             .items_center()
             .justify_center()
-            .bg(rgb(0x000e_0f14))
-            .text_color(rgb(0x008b_91a5))
+            .gap_3()
+            .bg(t.base)
+            .font(theme::ui_font())
+            .text_size(theme::size::large())
+            .text_color(t.muted)
+            .child(svg().path(icon("open")).size_8().text_color(t.border))
             .child(text)
     }
 }

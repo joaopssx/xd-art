@@ -188,3 +188,27 @@ next commit fixes the file, and the script now keeps the exit code.
 The history keeps both commits instead of rewriting the first one. To stay at the
 planned number of steps, the tagged release workflow goes into the same commit as the
 release documentation instead of a commit of its own.
+
+## 2026-11-12: platform UI font instead of an embedded one
+
+The plan was one embedded open font family with at most two weights. I did not add it:
+the only sources I allow myself to download from for this project are crates, the
+original's repository and gpui's documentation, and a font is none of those. xd-art uses
+the platform's interface font instead (Segoe UI on Windows, the system font on macOS,
+Noto Sans on Linux), through gpui's normal font lookup. Numbers in fields ask for
+tabular figures (`tnum`), which Segoe UI supports, so values do not shift sideways as
+they change. Embedding a font later only means changing `theme::ui_font`.
+
+## 2026-11-12: theme
+
+Every color is in `crates/xd-art-gui/src/theme.rs`. There are four dark variants and no
+light one. A test checks that text, muted text, the accent and the error color reach
+WCAG AA contrast (4.5:1) on every surface of every variant. The interface uses no blur,
+no large shadows and no gradients: flat surfaces are cheaper to draw and easier on the
+eyes next to pixel art.
+
+The icons are drawn by hand as 16x16 SVGs with a 1.5 pixel stroke and compiled into the
+binary; gpui parses one the first time it is shown.
+
+The GUI crate is a library with a thin binary on top, so its parts can have unit tests
+and the theme can grow ahead of the views that use it.

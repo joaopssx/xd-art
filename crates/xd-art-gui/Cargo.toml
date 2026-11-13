@@ -9,6 +9,10 @@ authors.workspace = true
 repository.workspace = true
 publish = false
 
+[lib]
+name = "xd_art_gui"
+path = "src/lib.rs"
+
 [[bin]]
 name = "xd-art"
 path = "src/main.rs"
