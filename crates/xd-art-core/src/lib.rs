@@ -45,6 +45,7 @@ pub mod post;
 pub mod prep;
 pub mod preset;
 pub mod quant;
+#[cfg(feature = "serde")]
 pub mod recipe;
 pub mod sampling;
 pub mod settings;

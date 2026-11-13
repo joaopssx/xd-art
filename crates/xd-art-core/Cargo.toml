@@ -20,12 +20,13 @@ gif = ["dep:gif"]
 # QOI image format.
 qoi = ["image/qoi"]
 # Recipes and JSON output.
-serde = []
+serde = ["dep:serde_json"]
 # Download palettes from Lospec. Off by default: nothing in the engine touches the
 # network unless this is enabled and the caller asks for it.
 online-palettes = []
 
 [dependencies]
+serde_json = { version = "1.0.145", optional = true }
 gif = { version = "0.14.2", optional = true, default-features = false, features = ["std"] }
 rayon = { version = "1.12.0", optional = true }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "bmp", "tga"] }
