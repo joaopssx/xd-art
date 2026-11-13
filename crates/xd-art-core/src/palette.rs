@@ -564,6 +564,179 @@ pub fn builtin(name: &str) -> Option<Palette> {
     Palette::new(b.name, colors).ok()
 }
 
+/// Palettes from [Lospec](https://lospec.com/palette-list), behind the
+/// `online-palettes` feature.
+///
+/// Nothing here runs unless called: no request at startup, no background refresh. A
+/// palette is fetched once from `https://lospec.com/palette-list/<slug>.json` (the
+/// endpoint Lospec's own download links use; checked on 2026-11-12 to return
+/// `{"name", "author", "colors"}`) and then read from the cache directory. The colors of
+/// a Lospec palette belong to its author, whose name comes with the palette.
+#[cfg(feature = "online-palettes")]
+pub mod lospec {
+    use std::path::Path;
+    use std::time::Duration;
+
+    use super::Palette;
+    use crate::{Error, Result};
+
+    /// The slug of a palette from a name, a slug or a Lospec link
+    /// (`"Pico 8"`, `"pico-8"` and `"https://lospec.com/palette-list/pico-8"` all give
+    /// `pico-8`). `None` when nothing usable is left.
+    #[must_use]
+    pub fn slug(input: &str) -> Option<String> {
+        let s = input.trim().trim_end_matches('/');
+        let s = s.rsplit('/').next().unwrap_or(s);
+        let s = s.strip_suffix(".json").unwrap_or(s);
+        let mut out = String::new();
+        for ch in s.chars() {
+            if ch.is_ascii_alphanumeric() {
+                out.push(ch.to_ascii_lowercase());
+            } else if (ch == '-' || ch == ' ' || ch == '_')
+                && !out.ends_with('-')
+                && !out.is_empty()
+            {
+                out.push('-');
+            }
+        }
+        let out = out.trim_end_matches('-').to_string();
+        (!out.is_empty()).then_some(out)
+    }
+
+    /// Reads Lospec's JSON. The palette is named `name by author` when there is an
+    /// author.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the JSON does not have a `colors` list of hex strings.
+    pub fn parse(json: &str) -> Result<Palette> {
+        let bad = |r: &str| Error::Invalid {
+            name: "lospec palette",
+            reason: r.into(),
+        };
+        let v: serde_json::Value = serde_json::from_str(json).map_err(|e| bad(&e.to_string()))?;
+        let colors = v["colors"]
+            .as_array()
+            .ok_or_else(|| bad("no colors list"))?;
+        let mut hex = String::new();
+        for c in colors {
+            hex.push_str(c.as_str().ok_or_else(|| bad("colors are not strings"))?);
+            hex.push('\n');
+        }
+        let mut p = Palette::parse_hex(&hex)?;
+        let name = v["name"].as_str().unwrap_or("");
+        let author = v["author"].as_str().unwrap_or("");
+        p.name = if author.is_empty() {
+            name.to_string()
+        } else {
+            format!("{name} by {author}")
+        };
+        Ok(p)
+    }
+
+    /// Gets a palette, from `cache` when it was fetched before.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the input has no usable slug, Lospec cannot be reached, it has no such
+    /// palette, or its answer cannot be read.
+    pub fn fetch(input: &str, cache: Option<&Path>) -> Result<Palette> {
+        let slug = slug(input).ok_or_else(|| Error::Invalid {
+            name: "lospec palette",
+            reason: format!("{input:?} is not a palette name or link"),
+        })?;
+        let cached = cache.map(|d| d.join(format!("{slug}.json")));
+        if let Some(path) = &cached
+            && let Ok(text) = std::fs::read_to_string(path)
+            && let Ok(p) = parse(&text)
+        {
+            return Ok(p);
+        }
+        let url = format!("https://lospec.com/palette-list/{slug}.json");
+        let fail = |e: ureq::Error| match e {
+            ureq::Error::StatusCode(404) => Error::Invalid {
+                name: "lospec palette",
+                reason: format!("lospec has no palette named {slug}"),
+            },
+            other => Error::Unsupported(format!("could not reach lospec: {other}")),
+        };
+        let mut resp = ureq::get(&url)
+            .header("User-Agent", concat!("xd-art/", env!("CARGO_PKG_VERSION")))
+            .config()
+            .timeout_global(Some(Duration::from_secs(15)))
+            .build()
+            .call()
+            .map_err(fail)?;
+        let text = resp.body_mut().read_to_string().map_err(fail)?;
+        let p = parse(&text)?;
+        if let Some(path) = &cached {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).ok();
+            }
+            // A failed cache write only means the next call asks again.
+            std::fs::write(path, &text).ok();
+        }
+        Ok(p)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn slugs_from_names_and_links() {
+            assert_eq!(slug("pico-8").as_deref(), Some("pico-8"));
+            assert_eq!(slug("Pico 8").as_deref(), Some("pico-8"));
+            assert_eq!(
+                slug("https://lospec.com/palette-list/sweetie-16").as_deref(),
+                Some("sweetie-16")
+            );
+            assert_eq!(
+                slug("https://lospec.com/palette-list/sweetie-16.json").as_deref(),
+                Some("sweetie-16")
+            );
+            assert_eq!(slug("  ").as_deref(), None);
+        }
+
+        #[test]
+        fn parses_the_lospec_format() {
+            let p = parse(r#"{"name":"Tiny","author":"Someone","colors":["000000","FFFFFF"]}"#)
+                .unwrap();
+            assert_eq!(p.name, "Tiny by Someone");
+            assert_eq!(p.colors(), &[[0; 3], [255; 3]]);
+            assert!(parse(r#"{"name":"x"}"#).is_err());
+            assert!(parse(r#"{"colors":[1,2]}"#).is_err());
+        }
+
+        #[test]
+        #[ignore = "talks to lospec.com"]
+        fn live_fetch() {
+            let p = fetch("pico-8", None).unwrap();
+            assert_eq!(p.len(), 16);
+            assert!(
+                fetch("surely-not-a-real-palette-xd", None)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("no palette named")
+            );
+        }
+
+        #[test]
+        fn cache_is_used_without_network() {
+            let dir = std::env::temp_dir().join(format!("xd-art-lospec-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("cached-one.json"),
+                r#"{"name":"C","author":"","colors":["123456"]}"#,
+            )
+            .unwrap();
+            let p = fetch("Cached One", Some(&dir)).unwrap();
+            assert_eq!(p.colors(), &[[0x12, 0x34, 0x56]]);
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

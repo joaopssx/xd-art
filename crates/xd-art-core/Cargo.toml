@@ -23,9 +23,10 @@ qoi = ["image/qoi"]
 serde = ["dep:serde_json"]
 # Download palettes from Lospec. Off by default: nothing in the engine touches the
 # network unless this is enabled and the caller asks for it.
-online-palettes = []
+online-palettes = ["dep:ureq", "serde"]
 
 [dependencies]
+ureq = { version = "3.5.2", optional = true, default-features = false, features = ["rustls"] }
 # Indexed PNG output; already part of the tree through image.
 png = "0.18.1"
 serde_json = { version = "1.0.145", optional = true }

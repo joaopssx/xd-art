@@ -68,6 +68,7 @@ palette picker.
 | `1-bit` | 2 | black and white |
 | `gray-4`, `gray-16` | 4, 16 | evenly spaced grays, computed |
 | `dungeon-16` | 16 | made for xd-art |
+| `blocks-24` | 24 | made for xd-art, for block game textures |
 | `console-32` | 32 | made for xd-art, in the spirit of 8-bit console palettes; not a copy of any console's |
 | `web-216` | 216 | the web safe color cube, computed |
 | `rgb-332` | 256 | 3-3-2 bit truecolor, computed |
@@ -75,3 +76,6 @@ palette picker.
 The original program starts with the DawnBringer 32 palette. I left it out because I
 could not find a license statement from its author. It is easy to load from a `.gpl` or
 `.hex` file, or through the optional Lospec import.
+
+Palettes imported from Lospec are not part of xd-art. Each comes with its author's name
+(shown in the palette name) and stays theirs.
