@@ -151,10 +151,6 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(17), AccentFromImage, c),
         KeyBinding::new(k(18), Fullscreen, c),
         KeyBinding::new(k(19), ReduceMotion, c),
-        KeyBinding::new(k(18), Fullscreen, c),
-        KeyBinding::new(k(19), ReduceMotion, c),
-        KeyBinding::new(k(18), Fullscreen, c),
-        KeyBinding::new(k(19), ReduceMotion, c),
     ]);
 }
 

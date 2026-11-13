@@ -16,6 +16,7 @@ pub mod gallery;
 pub mod history;
 pub mod panels;
 pub mod preview;
+pub mod retouch;
 pub mod strip;
 pub mod theme;
 pub mod variations;

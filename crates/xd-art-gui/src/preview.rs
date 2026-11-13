@@ -277,6 +277,16 @@ impl Viewer {
         self.zoom_at(step(self.zoom, up), mid);
     }
 
+    /// The image pixel under window position `p`, as last drawn. It can lie outside
+    /// the image.
+    pub fn pixel_at(&self, p: Point<Pixels>) -> (i64, i64) {
+        let (zoom, origin) = self.shown.get();
+        let b = self.bounds();
+        let x = (f32::from(p.x - b.origin.x) - origin.x) / zoom.max(f32::EPSILON);
+        let y = (f32::from(p.y - b.origin.y) - origin.y) / zoom.max(f32::EPSILON);
+        (x.floor() as i64, y.floor() as i64)
+    }
+
     /// Moves the image by a mouse delta.
     pub fn pan_by(&mut self, d: Point<Pixels>) {
         self.sync();

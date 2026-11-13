@@ -212,3 +212,18 @@ binary; gpui parses one the first time it is shown.
 
 The GUI crate is a library with a thin binary on top, so its parts can have unit tests
 and the theme can grow ahead of the views that use it.
+
+## 2026-11-13: retouches and the project files
+
+There is no project file format. The retouch layer and the dither mask are saved as two
+PNG files next to the source image (`cat.png.retouch.png`, `cat.png.mask.png`) when the
+user clicks "save with image", and opening `cat.png` loads them back. Any image editor
+can open or fix them, and nothing is written next to the user's files without asking.
+
+The layer is stored in art pixels, before the export scale, and only drawn when the
+art size matches the one it was painted at. Changing the size hides it instead of
+dropping it. The eraser gives pixels back to the conversion rather than painting them
+transparent. Pencil strokes have their own undo list, used while the pencil or the
+eraser is active; mask strokes are settings changes and go through the normal history.
+The tools are off for animated GIFs, where a single layer over every frame would be
+wrong more often than right.

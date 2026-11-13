@@ -189,6 +189,10 @@ pub struct Root {
     pub(crate) panel_opened: u32,
     /// Frames of an animated GIF; empty for still images.
     pub(crate) frames: crate::frames::Frames,
+    /// Pencil, eraser and mask brushes.
+    pub(crate) retouch: crate::retouch::Retouch,
+    /// Export scale `output` was made with.
+    pub(crate) output_scale: u32,
 }
 
 /// Length of interface transitions.
@@ -258,6 +262,8 @@ impl Root {
             edge_hover: false,
             panel_opened: 0,
             frames: crate::frames::Frames::default(),
+            retouch: crate::retouch::Retouch::default(),
+            output_scale: 1,
         }
     }
 
@@ -530,6 +536,7 @@ impl Root {
             .clone()
             .filter(|_| quick || self.output.is_none());
         let started = Instant::now();
+        let scale = settings.output.scale;
         cx.spawn(async move |this, cx| {
             let mut sources = Vec::new();
             if let Some(p) = proxy {
@@ -570,6 +577,7 @@ impl Root {
                     match result {
                         Ok((report, Some(out), palette, counts)) => {
                             root.output = Some(Arc::new(out));
+                            root.output_scale = scale;
                             root.strip.colors = palette;
                             root.strip.counts = counts;
                             if root.config.accent_from_image {
@@ -877,11 +885,15 @@ impl Root {
             let load = path.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { load_any(&load) })
+                .spawn(async move { (load_any(&load), Self::load_project(&load)) })
                 .await;
             this.update(cx, |root, cx| {
+                let (result, (layer, mask)) = result;
                 root.doc = match result {
                     Ok((image, frames)) => {
+                        // Retouches and the mask belong to one image.
+                        root.retouch.reset(layer);
+                        root.settings.mask = mask;
                         root.frames = crate::frames::Frames {
                             list: frames,
                             ..Default::default()
@@ -944,6 +956,14 @@ impl Root {
     }
 
     fn start_pan(&mut self, e: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if e.button == MouseButton::Left
+            && !self.viewer.space
+            && !self.viewer.near_split(e.position.x)
+            && self.frames.list.is_empty()
+            && self.tool_down(e.position, cx)
+        {
+            return;
+        }
         if e.button == MouseButton::Left && self.viewer.near_split(e.position.x) {
             self.viewer.dragging_split = true;
             return;
@@ -972,6 +992,14 @@ impl Root {
                 self.edge_hover = near;
                 cx.notify();
             }
+        }
+        if self.retouch.drawing() {
+            if e.pressed_button == Some(MouseButton::Left) {
+                self.tool_move(e.position, cx);
+            } else {
+                self.tool_up(cx);
+            }
+            return;
         }
         if self.viewer.dragging_split {
             if e.pressed_button.is_none() {
@@ -1115,6 +1143,9 @@ impl Root {
                 Side::Left => self.settings_panel(t, cx),
                 Side::Right => {
                     let mut v = self.right_contents(t);
+                    if self.frames.list.is_empty() {
+                        v.extend(self.retouch_panel(t, cx));
+                    }
                     if self.history.entries.len() > 1 {
                         v.push(
                             div()
@@ -1229,6 +1260,14 @@ impl Root {
             .on_scroll_wheel(cx.listener(Self::on_wheel))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::start_pan))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::start_pan))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &gpui::MouseUpEvent, _, cx| this.tool_up(cx)),
+            )
+            .when(
+                self.retouch.tool != crate::retouch::Tool::Off && self.output.is_some(),
+                |d| d.cursor_crosshair(),
+            )
             .when(self.viewer.panning.is_some() || self.viewer.space, |d| {
                 d.cursor_grab()
             });
@@ -1240,7 +1279,7 @@ impl Root {
         }
         if let Doc::Ready { image, .. } = &self.doc {
             let bg = [t.base.r, t.base.g, t.base.b].map(|v| (v * 255.0).round() as u8);
-            let shown = self.output.clone().unwrap_or_else(|| image.clone());
+            let shown = self.retouched().unwrap_or_else(|| image.clone());
             let before = self
                 .output
                 .as_ref()
@@ -1500,6 +1539,14 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+                if this.retouch.tool != crate::retouch::Tool::Off
+                    && e.keystroke.key == "escape"
+                    && !this.fullscreen
+                {
+                    this.retouch.tool = crate::retouch::Tool::Off;
+                    cx.notify();
+                    return;
+                }
                 if this.fullscreen && e.keystroke.key == "escape" {
                     this.fullscreen = false;
                     if window.is_fullscreen() {
@@ -1544,11 +1591,19 @@ impl Render for Root {
                 this.keep_variation(format!("version {n}"), this.settings.clone(), cx);
             }))
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
+                if this.retouch.tool.paints() && this.retouch.undo() {
+                    cx.notify();
+                    return;
+                }
                 if let Some(s) = this.history.undo() {
                     this.restore(s, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &Redo, _, cx| {
+                if this.retouch.tool.paints() && this.retouch.redo() {
+                    cx.notify();
+                    return;
+                }
                 if let Some(s) = this.history.redo() {
                     this.restore(s, cx);
                 }

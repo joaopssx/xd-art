@@ -197,11 +197,17 @@ impl Root {
                     .rounded(px(3.0))
                     .bg(color(c))
                     .border_1()
-                    .border_color(if editing.is_some() || self.strip.menu == Some(i) {
-                        t.accent
-                    } else {
-                        t.border
-                    })
+                    .border_color(
+                        if editing.is_some()
+                            || self.strip.menu == Some(i)
+                            || (self.retouch.tool == crate::retouch::Tool::Pencil
+                                && self.retouch.color == Some(c))
+                        {
+                            t.accent
+                        } else {
+                            t.border
+                        },
+                    )
                     .cursor_pointer()
                     .on_hover(cx.listener(move |this, on: &bool, _, cx| {
                         this.strip.hover = if *on {
@@ -213,6 +219,15 @@ impl Root {
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let current = this.strip.colors.get(i).copied().unwrap_or_default();
+                        if matches!(
+                            this.retouch.tool,
+                            crate::retouch::Tool::Pencil | crate::retouch::Tool::Picker
+                        ) {
+                            this.retouch.color = Some(current);
+                            this.retouch.tool = crate::retouch::Tool::Pencil;
+                            cx.notify();
+                            return;
+                        }
                         this.strip.editing = Some((i, hex(current)));
                         this.strip.menu = None;
                         window.focus(&this.focus_handle());

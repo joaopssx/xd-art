@@ -96,6 +96,13 @@ pub fn describe(old: &Settings, new: &Settings) -> String {
     if old.output != new.output {
         return format!("scale: {}x", new.output.scale);
     }
+    if old.mask != new.mask {
+        return if new.mask.is_some() {
+            "dither mask".into()
+        } else {
+            "mask cleared".into()
+        };
+    }
     "settings".into()
 }
 
