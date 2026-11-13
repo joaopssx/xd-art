@@ -1,4 +1,4 @@
-//! Exports: effects applied on the way out.
+//! Exports: sprite sheets, and effects applied on the way out.
 //!
 //! Effects are not part of the conversion. They run on the finished, upscaled image
 //! when saving, are all off by default, and never change what the preview shows unless
@@ -138,6 +138,140 @@ pub fn cycle_frames(ix: &Indexed, palettes: &[Vec<[u8; 3]>]) -> Result<Vec<Image
     palettes.iter().map(|p| ix.to_image(p)).collect()
 }
 
+/// Layout of a sprite sheet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct SheetLayout {
+    /// Frames per row. 0 puts every frame on one row (a horizontal strip); 1 makes a
+    /// vertical strip.
+    pub columns: u32,
+    /// Transparent pixels between frames and around the sheet.
+    pub spacing: u32,
+}
+
+/// Where each frame of a sheet is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SheetFrame {
+    /// Left edge in the sheet.
+    pub x: u32,
+    /// Top edge in the sheet.
+    pub y: u32,
+    /// Display time in milliseconds, 0 for still images.
+    pub duration_ms: u32,
+}
+
+/// A sprite sheet and its frame positions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sheet {
+    /// The packed image.
+    pub image: Image,
+    /// Width of every frame.
+    pub frame_width: u32,
+    /// Height of every frame.
+    pub frame_height: u32,
+    /// Columns used.
+    pub columns: u32,
+    /// Rows used.
+    pub rows: u32,
+    /// Spacing used.
+    pub spacing: u32,
+    /// Frame positions, in input order.
+    pub frames: Vec<SheetFrame>,
+}
+
+/// Packs frames of the same size into a grid, left to right, top to bottom.
+/// `durations_ms` may be empty (still frames) or have one entry per frame.
+///
+/// # Errors
+///
+/// Fails when there are no frames, the frames differ in size, or the sheet would be
+/// too large.
+pub fn sprite_sheet(frames: &[Image], durations_ms: &[u32], layout: SheetLayout) -> Result<Sheet> {
+    let first = frames.first().ok_or_else(|| Error::Invalid {
+        name: "sprite sheet",
+        reason: "no frames".into(),
+    })?;
+    let (fw, fh) = (first.width(), first.height());
+    if frames.iter().any(|f| (f.width(), f.height()) != (fw, fh)) {
+        return Err(Error::Invalid {
+            name: "sprite sheet",
+            reason: "frames have different sizes".into(),
+        });
+    }
+    let n = frames.len() as u32;
+    let columns = if layout.columns == 0 {
+        n
+    } else {
+        layout.columns.min(n)
+    };
+    let rows = n.div_ceil(columns);
+    let sp = layout.spacing;
+    let w = columns.checked_mul(fw + sp).and_then(|v| v.checked_add(sp));
+    let h = rows.checked_mul(fh + sp).and_then(|v| v.checked_add(sp));
+    let (Some(w), Some(h)) = (w, h) else {
+        return Err(Error::Invalid {
+            name: "sprite sheet",
+            reason: "too large".into(),
+        });
+    };
+    let mut rgba = vec![0u8; w as usize * h as usize * 4];
+    let mut placed = Vec::with_capacity(frames.len());
+    for (i, f) in frames.iter().enumerate() {
+        let (c, r) = (i as u32 % columns, i as u32 / columns);
+        let (x0, y0) = (sp + c * (fw + sp), sp + r * (fh + sp));
+        let src = f.to_rgba();
+        for y in 0..fh {
+            let s = (y * fw * 4) as usize;
+            let d = (((y0 + y) * w + x0) * 4) as usize;
+            rgba[d..d + (fw * 4) as usize].copy_from_slice(&src[s..s + (fw * 4) as usize]);
+        }
+        placed.push(SheetFrame {
+            x: x0,
+            y: y0,
+            duration_ms: durations_ms.get(i).copied().unwrap_or(0),
+        });
+    }
+    Ok(Sheet {
+        image: Image::from_rgba(w, h, &rgba)?,
+        frame_width: fw,
+        frame_height: fh,
+        columns,
+        rows,
+        spacing: sp,
+        frames: placed,
+    })
+}
+
+impl Sheet {
+    /// Frame positions as JSON. The format is xd-art's own, documented in
+    /// `docs/integration.md`; it is plain enough to read from any engine's scripting
+    /// language.
+    #[cfg(feature = "serde")]
+    #[must_use]
+    pub fn to_json(&self, image_file: &str) -> String {
+        let frames: Vec<serde_json::Value> = self
+            .frames
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "x": f.x, "y": f.y, "w": self.frame_width, "h": self.frame_height,
+                    "duration_ms": f.duration_ms,
+                })
+            })
+            .collect();
+        let v = serde_json::json!({
+            "xd-art-sheet": 1,
+            "image": image_file,
+            "frame_width": self.frame_width,
+            "frame_height": self.frame_height,
+            "columns": self.columns,
+            "rows": self.rows,
+            "spacing": self.spacing,
+            "frames": frames,
+        });
+        serde_json::to_string_pretty(&v).unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +302,76 @@ mod tests {
         assert_eq!(c.get(16, 16), Some([200, 200, 200, 255]));
         let corner = c.get(0, 0).unwrap();
         assert!(corner[0] < 200, "{corner:?}");
+    }
+
+    fn frames(n: u8) -> Vec<Image> {
+        (0..n)
+            .map(|i| Image::new(3, 2, [i * 10, 0, 0]).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn sheet_layouts() {
+        let f = frames(5);
+        let strip = sprite_sheet(&f, &[], SheetLayout::default()).unwrap();
+        assert_eq!((strip.image.width(), strip.image.height()), (15, 2));
+        let vertical = sprite_sheet(
+            &f,
+            &[],
+            SheetLayout {
+                columns: 1,
+                spacing: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!((vertical.image.width(), vertical.image.height()), (3, 10));
+        let grid = sprite_sheet(
+            &f,
+            &[100; 5],
+            SheetLayout {
+                columns: 2,
+                spacing: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!((grid.columns, grid.rows), (2, 3));
+        assert_eq!(
+            (grid.image.width(), grid.image.height()),
+            (2 * 4 + 1, 3 * 3 + 1)
+        );
+        assert_eq!(
+            grid.frames[3],
+            SheetFrame {
+                x: 5,
+                y: 4,
+                duration_ms: 100
+            }
+        );
+        assert_eq!(grid.image.get(5, 4), Some([30, 0, 0, 255]));
+        assert_eq!(
+            grid.image.get(0, 0),
+            Some([0, 0, 0, 0]),
+            "spacing is transparent"
+        );
+    }
+
+    #[test]
+    fn sheet_rejects_mixed_sizes() {
+        let mut f = frames(2);
+        f.push(Image::new(4, 4, [0; 3]).unwrap());
+        assert!(sprite_sheet(&f, &[], SheetLayout::default()).is_err());
+        assert!(sprite_sheet(&[], &[], SheetLayout::default()).is_err());
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn sheet_json_lists_frames() {
+        let s = sprite_sheet(&frames(2), &[80, 120], SheetLayout::default()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s.to_json("hero.png")).unwrap();
+        assert_eq!(v["xd-art-sheet"], 1);
+        assert_eq!(v["frames"][1]["x"], 3);
+        assert_eq!(v["frames"][1]["duration_ms"], 120);
+        assert_eq!(v["image"], "hero.png");
     }
 
     #[test]
