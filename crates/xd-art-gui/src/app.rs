@@ -8,9 +8,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, Context, Entity, ExternalPaths, FocusHandle, MouseButton, MouseDownEvent,
-    MouseMoveEvent, PathPromptOptions, Pixels, PromptLevel, ScrollDelta, ScrollWheelEvent,
-    SharedString, Subscription, Window, div, prelude::*, px, svg,
+    Animation, AnimationExt, AnyElement, Context, Entity, ExternalPaths, FocusHandle, MouseButton,
+    MouseDownEvent, MouseMoveEvent, PathPromptOptions, Pixels, PromptLevel, ScrollDelta,
+    ScrollWheelEvent, SharedString, Subscription, Window, div, ease_out_quint, prelude::*, px, svg,
 };
 use xd_art_core::buffer::Image;
 use xd_art_core::cancel::Cancel;
@@ -19,9 +19,9 @@ use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Siz
 
 use crate::Marks;
 use crate::actions::{
-    self, AccentFromImage, ActualSize, CommandPalette, Compare, Fit, Gallery, KeepVariation,
-    NextTheme, Open, Redo, ShortcutSheet, ToggleGrid, ToggleLeft, ToggleRight, Undo, Variations,
-    ZoomIn, ZoomOut,
+    self, AccentFromImage, ActualSize, CommandPalette, Compare, Fit, Fullscreen, Gallery,
+    KeepVariation, NextTheme, Open, Redo, ReduceMotion, ShortcutSheet, ToggleGrid, ToggleLeft,
+    ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
@@ -181,7 +181,16 @@ pub struct Root {
     pub(crate) variations: crate::variations::Variations,
     /// Command palette and shortcut sheet.
     pub(crate) commands: crate::commands::Commands,
+    /// Image only mode.
+    pub(crate) fullscreen: bool,
+    /// The mouse is at the top edge in image only mode, so the top bar shows.
+    pub(crate) edge_hover: bool,
+    /// Bumped every time a panel opens, so its fade in starts over.
+    pub(crate) panel_opened: u32,
 }
+
+/// Length of interface transitions.
+const TRANSITION: Duration = Duration::from_millis(120);
 
 /// Wait after the last change before the exact conversion starts, so a burst of
 /// changes (typing a value, clicking through options) runs it once.
@@ -243,6 +252,9 @@ impl Root {
             restoring: false,
             variations: crate::variations::Variations::default(),
             commands: crate::commands::Commands::default(),
+            fullscreen: false,
+            edge_hover: false,
+            panel_opened: 0,
         }
     }
 
@@ -941,11 +953,19 @@ impl Root {
             Side::Left => self.layout.left_open = !self.layout.left_open,
             Side::Right => self.layout.right_open = !self.layout.right_open,
         }
+        self.panel_opened = self.panel_opened.wrapping_add(1);
         self.persist(cx);
         cx.notify();
     }
 
     fn on_move(&mut self, e: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.fullscreen {
+            let near = f32::from(e.position.y) < 48.0;
+            if near != self.edge_hover {
+                self.edge_hover = near;
+                cx.notify();
+            }
+        }
         if self.viewer.dragging_split {
             if e.pressed_button.is_none() {
                 self.viewer.dragging_split = false;
@@ -1103,7 +1123,7 @@ impl Root {
                 }
             });
         let row = div().h_full().flex().flex_none();
-        match side {
+        let row = match side {
             Side::Left => row
                 .border_r_1()
                 .border_color(t.border)
@@ -1114,7 +1134,22 @@ impl Root {
                 .border_color(t.border)
                 .child(handle)
                 .child(body),
-        }
+        };
+        let id = (
+            if side == Side::Left {
+                "fade-left"
+            } else {
+                "fade-right"
+            },
+            self.panel_opened as usize,
+        );
+        let animation = Animation::new(if self.config.reduced_motion {
+            Duration::ZERO
+        } else {
+            TRANSITION
+        })
+        .with_easing(ease_out_quint());
+        row.with_animation(id, animation, |el, d| el.opacity(d))
     }
 
     fn right_contents(&self, t: Palette) -> Vec<AnyElement> {
@@ -1359,8 +1394,9 @@ pub fn panels_width(l: &Layout) -> Pixels {
 impl Render for Root {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx).c;
+        let image_only = self.fullscreen;
         let mut middle = div().flex_1().flex().min_h_0();
-        if self.layout.left_open {
+        if self.layout.left_open && !image_only {
             middle = middle.child(self.panel(Side::Left, t, cx));
         }
         middle = middle.child(
@@ -1370,11 +1406,11 @@ impl Render for Root {
                 .flex()
                 .flex_col()
                 .child(self.preview(t, cx))
-                .when(self.output.is_some(), |d| {
+                .when(self.output.is_some() && !image_only, |d| {
                     d.child(self.palette_strip(t, cx))
                 }),
         );
-        if self.layout.right_open {
+        if self.layout.right_open && !image_only {
             middle = middle.child(self.panel(Side::Right, t, cx));
         }
         div()
@@ -1404,6 +1440,35 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Gallery, _, cx| this.toggle_gallery(cx)))
+            .on_action(cx.listener(|this, _: &Fullscreen, window, cx| {
+                this.fullscreen = !this.fullscreen;
+                if window.is_fullscreen() != this.fullscreen {
+                    window.toggle_fullscreen();
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ReduceMotion, _, cx| {
+                this.config.reduced_motion = !this.config.reduced_motion;
+                this.notice = Some(
+                    if this.config.reduced_motion {
+                        "transitions off"
+                    } else {
+                        "transitions on"
+                    }
+                    .into(),
+                );
+                this.persist(cx);
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+                if this.fullscreen && e.keystroke.key == "escape" {
+                    this.fullscreen = false;
+                    if window.is_fullscreen() {
+                        window.toggle_fullscreen();
+                    }
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|this, _: &NextTheme, _, cx| {
                 let v = Theme::get(cx).variant;
                 let next =
@@ -1494,10 +1559,21 @@ impl Render for Root {
                     }
                 }),
             )
-            .child(self.top_bar(t, cx))
+            .when(!image_only, |d| d.child(self.top_bar(t, cx)))
             .child(middle)
-            .child(self.status_bar(t, cx))
-            .child(Self::footer(t, cx))
+            .when(!image_only, |d| {
+                d.child(self.status_bar(t, cx)).child(Self::footer(t, cx))
+            })
+            .when(image_only && self.edge_hover, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .child(self.top_bar(t, cx)),
+                )
+            })
             .when(self.commands.open, |d| d.child(self.command_palette(t, cx)))
             .when(self.commands.sheet, |d| d.child(self.shortcut_sheet(t)))
     }

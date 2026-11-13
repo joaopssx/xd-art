@@ -44,6 +44,10 @@ actions!(
         NextTheme,
         /// Take the accent color from the image, or go back to the theme's.
         AccentFromImage,
+        /// Only the image, on the whole screen.
+        Fullscreen,
+        /// Turn transitions off or on.
+        ReduceMotion,
     ]
 );
 
@@ -86,6 +90,12 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
         "cmd-shift-t",
         "accent color from the image on or off",
     ),
+    (
+        "f11",
+        "cmd-ctrl-f",
+        "image only, full screen (escape leaves)",
+    ),
+    ("ctrl-shift-m", "cmd-shift-m", "transitions off or on"),
 ];
 
 /// The action of [`SHORTCUTS`] entry `i`, to run it from the command palette.
@@ -108,7 +118,9 @@ pub fn command(i: usize) -> Box<dyn Action> {
         14 => Box::new(CommandPalette),
         15 => Box::new(ShortcutSheet),
         16 => Box::new(NextTheme),
-        _ => Box::new(AccentFromImage),
+        17 => Box::new(AccentFromImage),
+        18 => Box::new(Fullscreen),
+        _ => Box::new(ReduceMotion),
     }
 }
 
@@ -137,6 +149,12 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(15), ShortcutSheet, c),
         KeyBinding::new(k(16), NextTheme, c),
         KeyBinding::new(k(17), AccentFromImage, c),
+        KeyBinding::new(k(18), Fullscreen, c),
+        KeyBinding::new(k(19), ReduceMotion, c),
+        KeyBinding::new(k(18), Fullscreen, c),
+        KeyBinding::new(k(19), ReduceMotion, c),
+        KeyBinding::new(k(18), Fullscreen, c),
+        KeyBinding::new(k(19), ReduceMotion, c),
     ]);
 }
 
@@ -148,7 +166,7 @@ mod tests {
     fn every_shortcut_has_a_command() {
         // command() falls through to the last action, so the list and the match have
         // to stay the same length; the names make a mismatch obvious.
-        assert_eq!(command(SHORTCUTS.len() - 1).name(), AccentFromImage.name());
+        assert_eq!(command(SHORTCUTS.len() - 1).name(), ReduceMotion.name());
         assert_eq!(command(0).name(), Open.name());
     }
 }
