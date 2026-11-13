@@ -225,6 +225,23 @@ pub fn compose(out: &Image, layer: &Layer, palette: &[[u8; 3]]) -> Option<Image>
     Some(img)
 }
 
+/// Writes the painted pixels into an indexed image of the layer's size, as the index of
+/// the nearest palette color. Does nothing when the sizes differ.
+pub fn apply_indexed(ix: &mut xd_art_core::buffer::Indexed, layer: &Layer, palette: &[[u8; 3]]) {
+    if (ix.width, ix.height) != layer.size() || palette.is_empty() {
+        return;
+    }
+    for (i, &p) in layer.px.iter().enumerate() {
+        if p != 0 {
+            let c = nearest([(p >> 16) as u8, (p >> 8) as u8, p as u8], palette);
+            if let Some(k) = palette.iter().position(|q| *q == c) {
+                ix.index[i] = k as u8;
+                ix.set_clear(i, false);
+            }
+        }
+    }
+}
+
 /// `mask` (or a white one of `size` when there is none) with the brush painted to
 /// `value` at every point, given in art pixels of an image of `size`.
 pub fn paint_mask(
@@ -836,6 +853,9 @@ mod tests {
         let mut l = Layer::new(2, 1);
         l.put(1, 0, Some([250, 10, 10]));
         let img = compose(&out, &l, &[[0, 0, 0], [255, 0, 0]]).unwrap();
+        let mut ix = xd_art_core::buffer::Indexed::new(2, 1, 0).unwrap();
+        apply_indexed(&mut ix, &l, &[[0, 0, 0], [255, 0, 0]]);
+        assert_eq!(ix.index, vec![0, 1]);
         assert_eq!(img.get(1, 0), Some([255, 0, 0, 255]));
         assert_eq!(img.get(0, 0), Some([0, 0, 0, 255]));
         assert!(compose(&Image::new(3, 1, [0, 0, 0]).unwrap(), &l, &[]).is_none());

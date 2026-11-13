@@ -48,6 +48,8 @@ actions!(
         Fullscreen,
         /// Turn transitions off or on.
         ReduceMotion,
+        /// Export, recipes and palette import.
+        ExportPanel,
     ]
 );
 
@@ -96,6 +98,7 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
         "image only, full screen (escape leaves)",
     ),
     ("ctrl-shift-m", "cmd-shift-m", "transitions off or on"),
+    ("ctrl-s", "cmd-s", "export, recipes and palette import"),
 ];
 
 /// The action of [`SHORTCUTS`] entry `i`, to run it from the command palette.
@@ -120,7 +123,8 @@ pub fn command(i: usize) -> Box<dyn Action> {
         16 => Box::new(NextTheme),
         17 => Box::new(AccentFromImage),
         18 => Box::new(Fullscreen),
-        _ => Box::new(ReduceMotion),
+        19 => Box::new(ReduceMotion),
+        _ => Box::new(ExportPanel),
     }
 }
 
@@ -151,6 +155,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(17), AccentFromImage, c),
         KeyBinding::new(k(18), Fullscreen, c),
         KeyBinding::new(k(19), ReduceMotion, c),
+        KeyBinding::new(k(20), ExportPanel, c),
     ]);
 }
 
@@ -162,7 +167,7 @@ mod tests {
     fn every_shortcut_has_a_command() {
         // command() falls through to the last action, so the list and the match have
         // to stay the same length; the names make a mismatch obvious.
-        assert_eq!(command(SHORTCUTS.len() - 1).name(), ReduceMotion.name());
+        assert_eq!(command(SHORTCUTS.len() - 1).name(), ExportPanel.name());
         assert_eq!(command(0).name(), Open.name());
     }
 }

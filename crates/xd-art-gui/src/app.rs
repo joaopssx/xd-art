@@ -19,9 +19,9 @@ use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Siz
 
 use crate::Marks;
 use crate::actions::{
-    self, AccentFromImage, ActualSize, CommandPalette, Compare, Fit, Fullscreen, Gallery,
-    KeepVariation, NextTheme, Open, Redo, ReduceMotion, ShortcutSheet, ToggleGrid, ToggleLeft,
-    ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
+    self, AccentFromImage, ActualSize, CommandPalette, Compare, ExportPanel, Fit, Fullscreen,
+    Gallery, KeepVariation, NextTheme, Open, Redo, ReduceMotion, ShortcutSheet, ToggleGrid,
+    ToggleLeft, ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
@@ -193,6 +193,8 @@ pub struct Root {
     pub(crate) retouch: crate::retouch::Retouch,
     /// Export scale `output` was made with.
     pub(crate) output_scale: u32,
+    /// The export panel.
+    pub(crate) export: crate::exporting::Export,
 }
 
 /// Length of interface transitions.
@@ -264,6 +266,7 @@ impl Root {
             frames: crate::frames::Frames::default(),
             retouch: crate::retouch::Retouch::default(),
             output_scale: 1,
+            export: crate::exporting::Export::default(),
         }
     }
 
@@ -1034,7 +1037,7 @@ impl Root {
         cx.notify();
     }
 
-    fn title(&self) -> SharedString {
+    pub(crate) fn title(&self) -> SharedString {
         match &self.doc {
             Doc::Ready { path, .. } | Doc::Loading(path) => path
                 .file_name()
@@ -1539,6 +1542,11 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+                if this.export.open && e.keystroke.key == "escape" {
+                    this.export.open = false;
+                    cx.notify();
+                    return;
+                }
                 if this.retouch.tool != crate::retouch::Tool::Off
                     && e.keystroke.key == "escape"
                     && !this.fullscreen
@@ -1582,6 +1590,12 @@ impl Render for Root {
                 cx.notify();
             }))
             .capture_key_down(cx.listener(Self::command_key))
+            .capture_key_down(cx.listener(Self::lospec_key))
+            .on_action(cx.listener(|this, _: &ExportPanel, _, cx| {
+                this.export.open = !this.export.open;
+                this.export.lospec = None;
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &Variations, _, cx| {
                 this.variations.open = !this.variations.open;
                 cx.notify();
@@ -1670,6 +1684,7 @@ impl Render for Root {
             })
             .when(self.commands.open, |d| d.child(self.command_palette(t, cx)))
             .when(self.commands.sheet, |d| d.child(self.shortcut_sheet(t)))
+            .when(self.export.open, |d| d.child(self.export_panel(t, cx)))
     }
 }
 

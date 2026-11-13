@@ -151,9 +151,40 @@ fn extracting(s: &Settings) -> bool {
     matches!(s.colors.palette, PaletteSource::Extract { .. })
 }
 
+fn preset_names() -> Vec<SharedString> {
+    let mut v = vec![SharedString::from("custom")];
+    v.extend(
+        xd_art_core::preset::PRESETS
+            .iter()
+            .map(|p| SharedString::from(format!("{}: {}", p.name, p.about))),
+    );
+    v
+}
+
 /// Every choice in the panel.
 pub fn choices() -> Vec<Choice> {
     vec![
+        Choice {
+            id: "preset",
+            label: "start from",
+            section: Section::Input,
+            options: preset_names,
+            current: |s| {
+                xd_art_core::preset::PRESETS
+                    .iter()
+                    .position(|p| p.settings() == *s)
+                    .map_or(0, |i| i + 1)
+            },
+            apply: |s, i| {
+                if let Some(p) = i
+                    .checked_sub(1)
+                    .and_then(|i| xd_art_core::preset::PRESETS.get(i))
+                {
+                    *s = p.settings();
+                }
+            },
+            visible: always,
+        },
         Choice {
             id: "sample-mode",
             label: "mode",
