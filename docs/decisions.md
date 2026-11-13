@@ -303,3 +303,18 @@ reading the tree and searching the sources for each crate.
 
 Release binaries on Windows: `xd-art.exe` (interface) 9.8 MB, `xd-art-cli.exe` 2.2 MB.
 Most of the interface is gpui.
+
+## 2026-11-13: launcher files and `batch --next-to-input` (E15, E16)
+
+The context menu entries need a command that writes the result somewhere sensible
+without asking. The Windows registry cannot cut the extension off `%1`, and a desktop
+entry cannot either without a shell script, so `batch` learned `--next-to-input`: each
+result goes beside its source as `<name>-px.<ext>`. It refuses to run together with
+`-o` and does not replace existing files unless `-f` is given. The `.reg` files write
+to the current user's part of the registry only, and nothing in the repository
+imports or installs them.
+
+The same commit fixes `cargo doc` with warnings denied, which had failed since the
+k-means scratch buffer was added: its public doc linked to a private function. The CI
+doc job would have caught it on the first push; my local check before each commit did
+not build the docs, and now does.

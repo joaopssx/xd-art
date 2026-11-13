@@ -134,6 +134,7 @@ pub fn run(mut p: lexopt::Parser) -> Result<bool, Usage> {
     let mut suffix = String::new();
     let mut recursive = false;
     let mut texture_names = false;
+    let mut next_to_input = false;
     while let Some(arg) = p.next()? {
         let key = match arg {
             Short(c) => c.to_string(),
@@ -158,6 +159,7 @@ pub fn run(mut p: lexopt::Parser) -> Result<bool, Usage> {
             }
             "suffix" => suffix = p.value()?.string()?,
             "r" | "recursive" => recursive = true,
+            "next-to-input" => next_to_input = true,
             "texture-names" => texture_names = true,
             other => return Err(Usage(format!("unknown option {other}, try --help"))),
         }
@@ -167,10 +169,24 @@ pub fn run(mut p: lexopt::Parser) -> Result<bool, Usage> {
             "batch needs at least one file, folder or pattern".into(),
         ));
     }
-    let out_dir = out_dir.ok_or_else(|| Usage("batch needs -o <folder>".into()))?;
+    let out_dir = match (out_dir, next_to_input) {
+        (Some(_), true) => {
+            return Err(Usage("use either -o or --next-to-input, not both".into()));
+        }
+        (None, false) => {
+            return Err(Usage("batch needs -o <folder> or --next-to-input".into()));
+        }
+        (dir, _) => dir,
+    };
+    // Next to the input, a suffix keeps the result from replacing the source.
+    if next_to_input && suffix.is_empty() {
+        suffix = "-px".into();
+    }
     let files = expand(&inputs, recursive).map_err(Usage)?;
-    std::fs::create_dir_all(&out_dir)
-        .map_err(|e| Usage(format!("could not create {}: {e}", out_dir.display())))?;
+    if let Some(dir) = &out_dir {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| Usage(format!("could not create {}: {e}", dir.display())))?;
+    }
     let size = match o.settings.sample.size {
         xd_art_core::settings::Size::Absolute { width, .. } => width,
         xd_art_core::settings::Size::Relative { .. } => 0,
@@ -179,9 +195,13 @@ pub fn run(mut p: lexopt::Parser) -> Result<bool, Usage> {
     let threads = o.threads;
     crate::with_threads(threads, || {
         for f in &files {
+            let dir = out_dir
+                .as_deref()
+                .or_else(|| f.parent())
+                .unwrap_or(Path::new("."));
             let dest = target(
                 f,
-                &out_dir,
+                dir,
                 ext.as_deref(),
                 &suffix,
                 texture_names.then_some(size),

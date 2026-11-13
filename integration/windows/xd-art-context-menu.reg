@@ -1,0 +1,20 @@
+Windows Registry Editor Version 5.00
+
+; Adds "Open in xd-art" and "Convert to pixel art" to the right click menu of image
+; files, for the current user only (no administrator rights needed).
+;
+; Before importing: replace C:\\Program Files\\xd-art with the folder that holds
+; xd-art.exe and xd-art-cli.exe. Backslashes are doubled in this file.
+; xd-art-context-menu-remove.reg takes everything out again. See docs/integration.md.
+
+[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\image\shell\xd-art.open]
+@="Open in xd-art"
+
+[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\image\shell\xd-art.open\command]
+@="\"C:\\Program Files\\xd-art\\xd-art.exe\" \"%1\""
+
+[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\image\shell\xd-art.convert]
+@="Convert to pixel art"
+
+[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\image\shell\xd-art.convert\command]
+@="\"C:\\Program Files\\xd-art\\xd-art-cli.exe\" batch --next-to-input \"%1\""

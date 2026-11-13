@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; Removes what xd-art-context-menu.reg added. Nothing else is touched.
+
+[-HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\image\shell\xd-art.open]
+
+[-HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\image\shell\xd-art.convert]

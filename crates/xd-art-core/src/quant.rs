@@ -58,7 +58,7 @@ fn dist(a: [u8; 3], b: [u8; 3]) -> u64 {
     d(0) + d(1) + d(2)
 }
 
-/// Scratch space for [`kmeans`], so repeated calls do not allocate.
+/// Scratch space for the k-means quantizer, so repeated calls do not allocate.
 #[derive(Debug, Default)]
 pub struct Scratch {
     distance: Vec<u64>,

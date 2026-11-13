@@ -16,7 +16,7 @@ xd-art-cli list palettes
 | command | what it does |
 |---|---|
 | `convert <input> -o <output> [options]` | one conversion; the output format comes from the extension |
-| `batch <inputs>... -o <folder> [options]` | the same settings over many files |
+| `batch <inputs>... -o <folder> [options]` | the same settings over many files (or `--next-to-input` instead of `-o`) |
 | `info <file>...` | prints size (and frame count for GIFs) from the file header |
 | `list <what>` | `palettes`, `presets`, `samplers`, `metrics` or `dithers` |
 | `--version`, `--help` | |
@@ -129,6 +129,7 @@ does not expand them first. Every conversion option works the same as in `conver
 | option | |
 |---|---|
 | `-o <folder>` | where the results go; created when missing |
+| `--next-to-input` | instead of `-o`: each result goes beside its source, named `<name>-px` unless `--suffix` gives another ending. The context menu entries in `integration/` use this |
 | `-r`, `--recursive` | look into subfolders too |
 | `--format <ext>` | output format; by default the input's, with JPEG inputs written as PNG |
 | `--suffix <text>` | added before the extension |

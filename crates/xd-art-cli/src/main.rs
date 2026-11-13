@@ -65,6 +65,8 @@ batch:
       --format <ext>          output format (default: same as input, png for jpeg)
       --suffix <text>         added to every output name
       --texture-names         lowercase names with the size, like oak_log_16.png
+      --next-to-input         write each result beside its source (instead of -o),
+                              named <name>-px unless --suffix says otherwise
 other:
       --suggest               print a suggested size and exit
       --json                  machine readable output
