@@ -4,6 +4,7 @@
 //! error (unknown flag, bad value, missing file name). See `docs/cli.md`.
 
 mod args;
+mod batch;
 mod convert;
 
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ xd-art-cli: convert images to pixel art
 
 usage:
   xd-art-cli convert <input> -o <output> [options]
+  xd-art-cli batch <files, folders or patterns>... -o <folder> [options]
   xd-art-cli info <file>...
   xd-art-cli list <palettes|presets|samplers|metrics|dithers>
   xd-art-cli --version
@@ -57,6 +59,11 @@ settings files:
       --preset <name>         start from a style preset
       --recipe <file>         start from a recipe (or an SLK_img2pixel preset)
       --save-recipe <file>    write the settings used
+batch:
+  -r, --recursive             look into subfolders
+      --format <ext>          output format (default: same as input, png for jpeg)
+      --suffix <text>         added to every output name
+      --texture-names         lowercase names with the size, like oak_log_16.png
 other:
       --suggest               print a suggested size and exit
       --json                  machine readable output
@@ -302,6 +309,7 @@ fn run() -> Result<bool, Usage> {
         }
         Value(cmd) => match cmd.string()?.as_str() {
             "convert" => run_convert(p),
+            "batch" => batch::run(p),
             "info" => {
                 let files: Vec<PathBuf> = p.raw_args()?.map(PathBuf::from).collect();
                 if files.is_empty() {

@@ -155,3 +155,39 @@ fn recipe_round_trip_gives_the_same_pixels() {
     );
     std::fs::remove_dir_all(&d).ok();
 }
+
+#[test]
+fn batch_with_json_lines() {
+    let d = workdir("batch");
+    let input = sample(&d);
+    std::fs::copy(&input, d.join("second.png")).unwrap();
+    std::fs::write(d.join("broken.png"), b"not a png").unwrap();
+    let out = d.join("out");
+    let pattern = d.join("*.png");
+    let o = bin()
+        .args([
+            "batch",
+            pattern.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--json",
+            "-w",
+            "16",
+            "--texture-names",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1), "one file is broken");
+    let text = String::from_utf8_lossy(&o.stdout);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 4, "{text}");
+    assert!(lines.iter().filter(|l| l.contains(r#""ok":true"#)).count() == 2);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""ok":false"#) && l.contains("broken.png"))
+    );
+    assert_eq!(lines[3], r#"{"summary":true,"converted":2,"failed":1}"#);
+    assert!(out.join("second_16.png").exists());
+    std::fs::remove_dir_all(&d).ok();
+}

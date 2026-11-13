@@ -16,6 +16,7 @@ xd-art-cli list palettes
 | command | what it does |
 |---|---|
 | `convert <input> -o <output> [options]` | one conversion; the output format comes from the extension |
+| `batch <inputs>... -o <folder> [options]` | the same settings over many files |
 | `info <file>...` | prints size (and frame count for GIFs) from the file header |
 | `list <what>` | `palettes`, `presets`, `samplers`, `metrics` or `dithers` |
 | `--version`, `--help` | |
@@ -112,6 +113,65 @@ Recipes are described in [recipes.md](recipes.md).
 | `-q`, `--quiet` | print nothing on success |
 | `-f`, `--force` | replace output files that exist |
 | `-j`, `--threads <n>` | worker threads; the default is one per core |
+
+## Batch
+
+```sh
+xd-art-cli batch photos/ -o pixel/ --preset pico-8
+xd-art-cli batch "frames/walk_*.png" -o out/ -w 32 --suffix _32
+xd-art-cli batch textures/ -r -o pack/ --preset blocks-16 --texture-names
+```
+
+Inputs can be files, folders (every PNG, JPEG, BMP, TGA, QOI and GIF inside, sorted by
+name) and patterns with `*` and `?` in the file name part. Quote patterns so the shell
+does not expand them first. Every conversion option works the same as in `convert`.
+
+| option | |
+|---|---|
+| `-o <folder>` | where the results go; created when missing |
+| `-r`, `--recursive` | look into subfolders too |
+| `--format <ext>` | output format; by default the input's, with JPEG inputs written as PNG |
+| `--suffix <text>` | added before the extension |
+| `--texture-names` | lowercase ASCII names with the width appended (`Oak Log.png` at 16 becomes `oak_log_16.png`), as block game resource packs expect |
+
+A broken file does not stop the batch: it is reported and the rest goes on. The exit
+code is 1 when any file failed.
+
+## JSON output
+
+With `--json`, every converted file prints one JSON object on its own line, and
+`batch` adds a summary line at the end. The fields below are stable: new fields may be
+added in later versions, existing ones keep their name, type and meaning.
+
+Success:
+
+```json
+{"input":"in/a.png","output":"out/a.png","ok":true,"width":256,"height":160,"colors":14,"frames":1,"ms":3.2}
+```
+
+| field | type | |
+|---|---|---|
+| `input` | string | path as given |
+| `output` | string | path written |
+| `ok` | bool | `true` |
+| `width`, `height` | number | size of the written image, after upscaling |
+| `colors` | number | palette colors actually used (for animations, the palette size) |
+| `frames` | number | 1 for still images |
+| `ms` | number | time for this file in milliseconds |
+
+Failure:
+
+```json
+{"input":"in/broken.png","output":"out/broken.png","ok":false,"error":"could not decode in/broken.png: ..."}
+```
+
+Batch summary, always the last line:
+
+```json
+{"summary":true,"converted":2,"failed":1}
+```
+
+`convert --suggest --json` prints `{"input": ..., "width": ..., "height": ...}`.
 
 ## Exit codes
 
