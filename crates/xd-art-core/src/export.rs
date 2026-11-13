@@ -1,4 +1,5 @@
-//! Exports: sprite sheets, and effects applied on the way out.
+//! Exports: indexed PNG and the editor handoff, sprite sheets, and effects applied on
+//! the way out.
 //!
 //! Effects are not part of the conversion. They run on the finished, upscaled image
 //! when saving, are all off by default, and never change what the preview shows unless
@@ -272,6 +273,147 @@ impl Sheet {
     }
 }
 
+/// Encodes an indexed image as a palette PNG (color type 3), with a transparency chunk
+/// when some pixels are clear. Editors like Aseprite and GIMP open it with the palette
+/// intact, which an RGBA PNG would lose.
+///
+/// # Errors
+///
+/// Fails when the palette is empty or too large, or the encoder fails.
+pub fn indexed_png(ix: &Indexed, palette: &[[u8; 3]]) -> Result<Vec<u8>> {
+    if palette.is_empty() || palette.len() > 256 {
+        return Err(Error::Invalid {
+            name: "palette",
+            reason: "needs 1 to 256 colors".into(),
+        });
+    }
+    let mut colors = palette.to_vec();
+    let clear = ix.clear.iter().any(|&c| c);
+    // A free slot for transparency, or index 0 when the palette is full.
+    let slot = if clear {
+        if colors.len() < 256 {
+            colors.push([0, 0, 0]);
+            Some(colors.len() - 1)
+        } else {
+            Some(0)
+        }
+    } else {
+        None
+    };
+    let data: Vec<u8> = ix
+        .index
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| match slot {
+            Some(s) if ix.is_clear(i) => s as u8,
+            _ => c,
+        })
+        .collect();
+    let mut out = Vec::new();
+    let enc_err = |e: png::EncodingError| Error::Encode {
+        path: "<memory>".into(),
+        reason: e.to_string(),
+    };
+    {
+        let mut enc = png::Encoder::new(&mut out, ix.width, ix.height);
+        enc.set_color(png::ColorType::Indexed);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_palette(colors.iter().flatten().copied().collect::<Vec<u8>>());
+        if let Some(s) = slot {
+            let mut trns = vec![255u8; s + 1];
+            trns[s] = 0;
+            enc.set_trns(trns);
+        }
+        let mut w = enc.write_header().map_err(enc_err)?;
+        w.write_image_data(&data).map_err(enc_err)?;
+    }
+    Ok(out)
+}
+
+/// A file name safe for block game resource packs: lowercase ASCII letters, digits and
+/// `_`, with the size appended (`Stone Wall.jpg` at 16 becomes `stone_wall_16.png`).
+#[must_use]
+pub fn texture_name(stem: &str, size: u32) -> String {
+    let mut name = String::with_capacity(stem.len() + 8);
+    let mut last_us = true;
+    for ch in stem.chars() {
+        if ch.is_ascii_alphanumeric() {
+            name.push(ch.to_ascii_lowercase());
+            last_us = false;
+        } else if !last_us {
+            name.push('_');
+            last_us = true;
+        }
+    }
+    while name.ends_with('_') {
+        name.pop();
+    }
+    if name.is_empty() {
+        name.push_str("texture");
+    }
+    format!("{name}_{size}.png")
+}
+
+/// Files written by [`handoff`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Handoff {
+    /// The written paths, in the order below.
+    pub files: Vec<std::path::PathBuf>,
+}
+
+/// Writes what another program needs to keep working on the result: an indexed PNG,
+/// the palette as `.gpl` and `.hex`, and (with the `serde` feature) a JSON file with the
+/// size, the colors and the recipe that made it. Files are `<stem>.png`,
+/// `<stem>.gpl`, `<stem>.hex` and `<stem>.json` in `dir`.
+///
+/// # Errors
+///
+/// Fails on a write error.
+pub fn handoff(
+    ix: &Indexed,
+    palette: &crate::palette::Palette,
+    settings: &crate::settings::Settings,
+    dir: &std::path::Path,
+    stem: &str,
+) -> Result<Handoff> {
+    let write = |name: String, bytes: &[u8]| -> Result<std::path::PathBuf> {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(path)
+    };
+    let mut files = vec![
+        write(format!("{stem}.png"), &indexed_png(ix, palette.colors())?)?,
+        write(format!("{stem}.gpl"), palette.to_gpl().as_bytes())?,
+        write(format!("{stem}.hex"), palette.to_hex().as_bytes())?,
+    ];
+    #[cfg(feature = "serde")]
+    {
+        let recipe: serde_json::Value =
+            serde_json::from_str(&crate::recipe::to_json(settings)).unwrap_or_default();
+        let meta = serde_json::json!({
+            "xd-art-handoff": 1,
+            "image": format!("{stem}.png"),
+            "width": ix.width,
+            "height": ix.height,
+            "colors": palette.colors().iter().map(|c| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2])).collect::<Vec<_>>(),
+            "transparent": ix.clear.iter().any(|&c| c),
+            "recipe": recipe,
+        });
+        files.push(write(
+            format!("{stem}.json"),
+            serde_json::to_string_pretty(&meta)
+                .unwrap_or_default()
+                .as_bytes(),
+        )?);
+    }
+    #[cfg(not(feature = "serde"))]
+    let _ = settings;
+    Ok(Handoff { files })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,6 +514,63 @@ mod tests {
         assert_eq!(v["frames"][1]["x"], 3);
         assert_eq!(v["frames"][1]["duration_ms"], 120);
         assert_eq!(v["image"], "hero.png");
+    }
+
+    #[test]
+    fn indexed_png_keeps_palette_and_transparency() {
+        let mut ix = Indexed::new(3, 1, 1).unwrap();
+        ix.set_clear(2, true);
+        let pal = [[10, 20, 30], [200, 100, 0]];
+        let bytes = indexed_png(&ix, &pal).unwrap();
+        let dec = png::Decoder::new(std::io::Cursor::new(&bytes));
+        let reader = dec.read_info().unwrap();
+        let info = reader.info();
+        assert_eq!(info.color_type, png::ColorType::Indexed);
+        assert_eq!(info.palette.as_deref().map(<[u8]>::len), Some(9));
+        assert_eq!(info.trns.as_deref(), Some(&[255, 255, 0][..]));
+        let img = crate::io::decode_with(&bytes, &crate::io::LoadOptions::default())
+            .unwrap()
+            .image;
+        assert_eq!(img.get(1, 0), Some([200, 100, 0, 255]));
+        assert_eq!(img.get(2, 0).unwrap()[3], 0);
+    }
+
+    #[test]
+    fn texture_names_are_predictable() {
+        assert_eq!(
+            texture_name("Stone Wall (old)", 16),
+            "stone_wall_old_16.png"
+        );
+        assert_eq!(texture_name("___", 32), "texture_32.png");
+        assert_eq!(texture_name("oak-log", 64), "oak_log_64.png");
+    }
+
+    #[test]
+    fn handoff_writes_every_file() {
+        let dir = std::env::temp_dir().join(format!("xd-art-handoff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ix = Indexed::new(2, 2, 0).unwrap();
+        let pal = crate::palette::Palette::new("two", vec![[0; 3], [255; 3]]).unwrap();
+        let h = handoff(
+            &ix,
+            &pal,
+            &crate::settings::Settings::default(),
+            &dir,
+            "art",
+        )
+        .unwrap();
+        let expect = if cfg!(feature = "serde") { 4 } else { 3 };
+        assert_eq!(h.files.len(), expect);
+        for f in &h.files {
+            assert!(f.exists(), "{}", f.display());
+        }
+        assert_eq!(
+            crate::palette::Palette::load(&dir.join("art.gpl"))
+                .unwrap()
+                .colors(),
+            pal.colors()
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

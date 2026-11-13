@@ -509,6 +509,13 @@ pub const BUILTINS: &[Builtin] = &[
         ),
     },
     Builtin {
+        name: "blocks-24",
+        source: "xd-art, made for this project: stone, dirt, wood, leaves, water and ore tones for block game textures",
+        data: Data::Hex(
+            "1a1a1c 3b3b40 5e5e66 8a8a92 b5b5bc 4a3121 6e4a2f 93683f              b88c5a 2f4a1c 4a7028 6f9c3a 9cc95a 1e3a5c 2f5f8f 4f8fc4              8fc4e8 7a1f1f b83a2a e0b040 f2e6b0 3fc0b0 9a6ac0 e8e8e8",
+        ),
+    },
+    Builtin {
         name: "web-216",
         source: "the 216 color web safe cube, 6 levels per channel",
         data: Data::Cube(
@@ -624,7 +631,7 @@ mod tests {
 
     #[test]
     fn every_builtin_builds() {
-        let expect = [16, 4, 16, 2, 4, 16, 16, 32, 216, 256];
+        let expect = [16, 4, 16, 2, 4, 16, 16, 32, 24, 216, 256];
         for (b, n) in BUILTINS.iter().zip(expect) {
             let p = builtin(b.name).unwrap();
             assert_eq!(p.len(), n, "{}", b.name);

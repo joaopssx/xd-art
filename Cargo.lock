@@ -6927,6 +6927,7 @@ version = "0.1.0"
 dependencies = [
  "gif",
  "image",
+ "png 0.18.1",
  "rayon",
  "serde_json",
 ]

@@ -141,7 +141,37 @@ pub const PRESETS: &[Preset] = &[
             s.post.cleanup = 2;
         },
     },
+    Preset {
+        name: "blocks-16",
+        about: "16x16 texture for block game resource packs, transparency kept, no dithering",
+        build: |s| blocks(s, 16),
+    },
+    Preset {
+        name: "blocks-32",
+        about: "32x32 texture for block game resource packs",
+        build: |s| blocks(s, 32),
+    },
+    Preset {
+        name: "blocks-64",
+        about: "64x64 texture for block game resource packs",
+        build: |s| blocks(s, 64),
+    },
 ];
+
+/// Square textures for Minecraft style resource packs: square output, box sampling,
+/// the earthy `blocks-24` palette, a hard alpha cut so edges stay crisp, and cleanup of
+/// stray pixels that read as noise at 16x16.
+fn blocks(s: &mut Settings, size: u32) {
+    palette(s, "blocks-24");
+    s.sample.size = Size::Absolute {
+        width: size,
+        height: size,
+        keep_aspect: false,
+    };
+    s.sample.mode = SampleMode::Box;
+    s.dither.alpha_threshold = 128;
+    s.post.cleanup = 1;
+}
 
 /// A preset by name.
 #[must_use]
