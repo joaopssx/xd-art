@@ -19,6 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 xd-art-core = { path = "../xd-art-core" }
+xd-art-text = { path = "../xd-art-text" }
 gpui = "=0.2.2"
 # Only for the frame type gpui draws images from; the same version gpui uses.
 image = { version = "0.25.10", default-features = false }

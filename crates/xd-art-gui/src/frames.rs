@@ -13,6 +13,7 @@ use xd_art_core::buffer::Image;
 
 use crate::app::{Doc, Root};
 use crate::theme::{self, Palette};
+use xd_art_text::{fill, mark, tr};
 
 /// One frame in the editor.
 #[derive(Clone)]
@@ -227,7 +228,7 @@ impl Root {
                 .cursor_pointer()
                 .text_color(t.muted)
                 .hover(|d| d.bg(t.elevated).text_color(t.text))
-                .child(label)
+                .child(tr(label))
         };
         let delay = self
             .frames
@@ -260,38 +261,44 @@ impl Root {
                     .items_center()
                     .gap_1()
                     .child(
-                        button("play", if self.frames.playing { "stop" } else { "play" })
-                            .on_click(cx.listener(|this, _, _, cx| this.play(cx))),
+                        button(
+                            "play",
+                            if self.frames.playing {
+                                mark("stop")
+                            } else {
+                                mark("play")
+                            },
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.play(cx))),
                     )
-                    .child(button("skip", "skip").on_click(
+                    .child(button("skip", mark("skip")).on_click(
                         cx.listener(|this, _, _, cx| this.frames_edit(Frames::toggle_skip, cx)),
                     ))
-                    .child(button("dup", "duplicate").on_click(
+                    .child(button("dup", mark("duplicate")).on_click(
                         cx.listener(|this, _, _, cx| this.frames_edit(Frames::duplicate, cx)),
                     ))
-                    .child(button("remove", "remove").on_click(
+                    .child(button("remove", mark("remove")).on_click(
                         cx.listener(|this, _, _, cx| this.frames_edit(Frames::remove, cx)),
                     ))
-                    .child(button("left", "move left").on_click(
+                    .child(button("left", mark("move left")).on_click(
                         cx.listener(|this, _, _, cx| this.frames_edit(|f| f.shift(-1), cx)),
                     ))
-                    .child(button("right", "move right").on_click(
+                    .child(button("right", mark("move right")).on_click(
                         cx.listener(|this, _, _, cx| this.frames_edit(|f| f.shift(1), cx)),
                     ))
-                    .child(button("slower", "longer").on_click(cx.listener(
+                    .child(button("slower", mark("longer")).on_click(cx.listener(
                         move |this, _, _, cx| {
                             this.frames_edit(|f| f.set_delay(delay.saturating_add(2)), cx);
                         },
                     )))
-                    .child(button("faster", "shorter").on_click(cx.listener(
+                    .child(button("faster", mark("shorter")).on_click(cx.listener(
                         move |this, _, _, cx| {
                             this.frames_edit(|f| f.set_delay(delay.saturating_sub(2)), cx);
                         },
                     )))
-                    .child(div().text_color(t.muted).child(SharedString::from(format!(
-                        "{} frames, {} selected, shift click selects a range",
-                        self.frames.list.len(),
-                        sel.count()
+                    .child(div().text_color(t.muted).child(SharedString::from(fill(
+                        tr("{0} frames, {1} selected, shift click selects a range"),
+                        &[&self.frames.list.len(), &sel.count()],
                     )))),
             )
             .into_any_element()

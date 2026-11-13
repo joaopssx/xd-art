@@ -1,0 +1,13 @@
+[package]
+name = "xd-art-text"
+description = "Interface strings of xd-art in English and Portuguese"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true

@@ -20,8 +20,9 @@ use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Siz
 use crate::Marks;
 use crate::actions::{
     self, AccentFromImage, ActualSize, CommandPalette, Compare, DevOverlay, ExportPanel, Fit,
-    Fullscreen, Gallery, KeepVariation, NextTheme, Open, Quit, Redo, ReduceMotion, ShortcutSheet,
-    ToggleGrid, ToggleLeft, ToggleResident, ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
+    Fullscreen, Gallery, KeepVariation, Language, NextTheme, Open, Quit, Redo, ReduceMotion,
+    ShortcutSheet, ToggleGrid, ToggleLeft, ToggleResident, ToggleRight, Undo, Variations, ZoomIn,
+    ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
@@ -32,6 +33,7 @@ use crate::preview::Viewer;
 use crate::strip::Strip;
 use crate::theme::{self, Palette, Theme};
 use crate::widgets::{Slider, SliderEvent, SliderSpec};
+use xd_art_text::{fill, mark, tr};
 
 /// What a dropped or opened file is, by its extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -331,21 +333,21 @@ impl Root {
         let absolute = |s: &Settings| matches!(s.sample.size, Size::Absolute { .. });
         let relative = |s: &Settings| matches!(s.sample.size, Size::Relative { .. });
         self.control(
-            spec(Prepare, "blur", (0.0, 32.0, 0.25), 0.0, 2),
+            spec(Prepare, mark("blur"), (0.0, 32.0, 0.25), 0.0, 2),
             |s| s.blur.radius,
             |s, v| s.blur.radius = v,
             always,
             cx,
         );
         self.control(
-            spec(Prepare, "box blur from", (1.0, 32.0, 0.5), 5.0, 1),
+            spec(Prepare, mark("box blur from"), (1.0, 32.0, 0.5), 5.0, 1),
             |s| s.blur.box_from,
             |s, v| s.blur.box_from = v,
             |s| s.blur.radius > 0.0 && !s.blur.box_approx,
             cx,
         );
         self.control(
-            spec(Sampling, "width", (1.0, 512.0, 1.0), 64.0, 0),
+            spec(Sampling, mark("width"), (1.0, 512.0, 1.0), 64.0, 0),
             |s| match s.sample.size {
                 Size::Absolute { width, .. } => width as f32,
                 Size::Relative { .. } => 64.0,
@@ -359,7 +361,7 @@ impl Root {
             cx,
         );
         self.control(
-            spec(Sampling, "height", (1.0, 512.0, 1.0), 64.0, 0),
+            spec(Sampling, mark("height"), (1.0, 512.0, 1.0), 64.0, 0),
             |s| match s.sample.size {
                 Size::Absolute { height, .. } => height as f32,
                 Size::Relative { .. } => 64.0,
@@ -381,7 +383,7 @@ impl Root {
             cx,
         );
         self.control(
-            spec(Sampling, "divide by", (1.0, 32.0, 1.0), 4.0, 0),
+            spec(Sampling, mark("divide by"), (1.0, 32.0, 1.0), 4.0, 0),
             |s| match s.sample.size {
                 Size::Relative { x, .. } => x as f32,
                 Size::Absolute { .. } => 4.0,
@@ -396,77 +398,77 @@ impl Root {
             cx,
         );
         self.control(
-            spec(Sampling, "offset x", (-1.0, 1.0, 0.01), 0.0, 2),
+            spec(Sampling, mark("offset x"), (-1.0, 1.0, 0.01), 0.0, 2),
             |s| s.sample.offset_x,
             |s, v| s.sample.offset_x = v,
             always,
             cx,
         );
         self.control(
-            spec(Sampling, "offset y", (-1.0, 1.0, 0.01), 0.0, 2),
+            spec(Sampling, mark("offset y"), (-1.0, 1.0, 0.01), 0.0, 2),
             |s| s.sample.offset_y,
             |s, v| s.sample.offset_y = v,
             always,
             cx,
         );
         self.control(
-            spec(Sampling, "edge strength", (0.0, 1.0, 0.01), 0.6, 2),
+            spec(Sampling, mark("edge strength"), (0.0, 1.0, 0.01), 0.6, 2),
             |s| s.sample.edge_strength,
             |s, v| s.sample.edge_strength = v,
             |s| s.sample.mode == SampleMode::Edge,
             cx,
         );
         self.control(
-            spec(Color, "sharpen", (0.0, 4.0, 0.05), 0.0, 2),
+            spec(Color, mark("sharpen"), (0.0, 4.0, 0.05), 0.0, 2),
             |s| s.adjust.sharpen,
             |s, v| s.adjust.sharpen = v,
             always,
             cx,
         );
         self.control(
-            spec(Color, "brightness", (-1.0, 1.0, 0.01), 0.0, 2),
+            spec(Color, mark("brightness"), (-1.0, 1.0, 0.01), 0.0, 2),
             |s| s.adjust.brightness,
             |s, v| s.adjust.brightness = v,
             always,
             cx,
         );
         self.control(
-            spec(Color, "contrast", (0.0, 3.0, 0.01), 1.0, 2),
+            spec(Color, mark("contrast"), (0.0, 3.0, 0.01), 1.0, 2),
             |s| s.adjust.contrast,
             |s, v| s.adjust.contrast = v,
             always,
             cx,
         );
         self.control(
-            spec(Color, "saturation", (0.0, 3.0, 0.01), 1.0, 2),
+            spec(Color, mark("saturation"), (0.0, 3.0, 0.01), 1.0, 2),
             |s| s.adjust.saturation,
             |s, v| s.adjust.saturation = v,
             always,
             cx,
         );
         self.control(
-            spec(Color, "hue", (-180.0, 180.0, 1.0), 0.0, 0),
+            spec(Color, mark("hue"), (-180.0, 180.0, 1.0), 0.0, 0),
             |s| s.adjust.hue,
             |s, v| s.adjust.hue = v,
             always,
             cx,
         );
         self.control(
-            spec(Color, "gamma", (0.1, 4.0, 0.01), 1.0, 2),
+            spec(Color, mark("gamma"), (0.1, 4.0, 0.01), 1.0, 2),
             |s| s.adjust.gamma,
             |s, v| s.adjust.gamma = v,
             always,
             cx,
         );
         self.control(
-            spec(Color, "tint strength", (0.0, 1.0, 0.01), 1.0, 2),
+            spec(Color, mark("tint strength"), (0.0, 1.0, 0.01), 1.0, 2),
             |s| s.adjust.tint_strength,
             |s, v| s.adjust.tint_strength = v,
             |s| s.adjust.tint != [255; 3],
             cx,
         );
         self.control(
-            spec(Color, "colors", (2.0, 64.0, 1.0), 16.0, 0),
+            spec(Color, mark("colors"), (2.0, 64.0, 1.0), 16.0, 0),
             |s| match &s.colors.palette {
                 PaletteSource::Extract { count, .. } => f32::from(*count),
                 _ => 16.0,
@@ -480,35 +482,47 @@ impl Root {
             cx,
         );
         self.control(
-            spec(Dithering, "amount", (0.0, 1.0, 0.01), 0.2, 2),
+            spec(Dithering, mark("amount"), (0.0, 1.0, 0.01), 0.2, 2),
             |s| s.dither.amount,
             |s, v| s.dither.amount = v,
             |s| s.dither.mode.is_ordered(),
             cx,
         );
         self.control(
-            spec(Dithering, "alpha threshold", (0.0, 255.0, 1.0), 128.0, 0),
+            spec(
+                Dithering,
+                mark("alpha threshold"),
+                (0.0, 255.0, 1.0),
+                128.0,
+                0,
+            ),
             |s| f32::from(s.dither.alpha_threshold),
             |s, v| s.dither.alpha_threshold = v as u8,
             always,
             cx,
         );
         self.control(
-            spec(Dithering, "target colors", (2.0, 64.0, 1.0), 8.0, 0),
+            spec(Dithering, mark("target colors"), (2.0, 64.0, 1.0), 8.0, 0),
             |s| f32::from(s.dither.target_colors),
             |s, v| s.dither.target_colors = v as u16,
             |s| s.dither.mode == DitherMode::MedianCut,
             cx,
         );
         self.control(
-            spec(Post, "merge colors closer than", (0.0, 64.0, 1.0), 0.0, 0),
+            spec(
+                Post,
+                mark("merge colors closer than"),
+                (0.0, 64.0, 1.0),
+                0.0,
+                0,
+            ),
             |s| f32::from(s.post.merge),
             |s, v| s.post.merge = v as u8,
             always,
             cx,
         );
         self.control(
-            spec(Output, "scale", (1.0, 16.0, 1.0), 1.0, 0),
+            spec(Output, mark("scale"), (1.0, 16.0, 1.0), 1.0, 0),
             |s| s.output.scale as f32,
             |s, v| s.output.scale = v as u32,
             always,
@@ -676,17 +690,20 @@ impl Root {
         };
         match &self.doc {
             Doc::Ready { image, .. } => vec![
-                row("size", format!("{} x {}", image.width(), image.height())),
                 row(
-                    "transparency",
+                    tr("size"),
+                    format!("{} x {}", image.width(), image.height()),
+                ),
+                row(
+                    tr("transparency"),
                     if image.alpha().is_some() {
-                        "yes".into()
+                        tr("yes").into()
                     } else {
-                        "no".into()
+                        tr("no").into()
                     },
                 ),
             ],
-            _ => vec![row("size", "no image".into())],
+            _ => vec![row(tr("size"), tr("no image").into())],
         }
     }
 
@@ -789,7 +806,8 @@ impl Root {
     fn apply_palette(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
         match xd_art_core::palette::Palette::load(path) {
             Ok(p) => {
-                self.notice = Some(format!("palette {} ({} colors)", p.name, p.len()).into());
+                self.notice =
+                    Some(fill(tr("palette {0} ({1} colors)"), &[&p.name, &p.len()]).into());
                 self.settings.colors.palette = PaletteSource::Colors(p.colors().to_vec());
                 self.settings_changed(false, cx);
             }
@@ -808,7 +826,7 @@ impl Root {
         match read {
             Ok(s) => {
                 self.settings = s;
-                self.notice = Some(format!("recipe {}", path.display()).into());
+                self.notice = Some(fill(tr("recipe {0}"), &[&path.display()]).into());
                 self.settings_changed(false, cx);
             }
             Err(e) => self.notice = Some(e.into()),
@@ -825,9 +843,9 @@ impl Root {
     ) {
         let answer = window.prompt(
             PromptLevel::Info,
-            &format!("Convert {n} images with the current settings?"),
-            Some("Pick a folder for the results next."),
-            &["Convert", "Open the first one", "Cancel"],
+            &fill(tr("Convert {0} images with the current settings?"), &[&n]),
+            Some(tr("Pick a folder for the results next.")),
+            &[tr("Convert"), tr("Open the first one"), tr("Cancel")],
             cx,
         );
         let settings = self.settings.clone();
@@ -1183,7 +1201,7 @@ impl Root {
                                 .mt_3()
                                 .text_size(theme::size::title())
                                 .text_color(t.text)
-                                .child("History")
+                                .child(tr("History"))
                                 .into_any_element(),
                         );
                         v.extend(self.timeline(t, cx));
@@ -1233,24 +1251,27 @@ impl Root {
         };
         match &self.doc {
             Doc::Ready { image, .. } => vec![
-                row("source", format!("{} x {}", image.width(), image.height())),
                 row(
-                    "alpha",
+                    tr("source"),
+                    format!("{} x {}", image.width(), image.height()),
+                ),
+                row(
+                    tr("alpha"),
                     if image.alpha().is_some() {
-                        "yes".into()
+                        tr("yes").into()
                     } else {
-                        "no".into()
+                        tr("no").into()
                     },
                 ),
             ],
-            _ => vec![row("source", "none".into())],
+            _ => vec![row(tr("source"), tr("none").into())],
         }
     }
 
     fn preview(&self, t: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let text: SharedString = match &self.doc {
-            Doc::Empty => "drop an image here".into(),
-            Doc::Loading(_) => format!("opening {}", self.title()).into(),
+            Doc::Empty => tr("drop an image here").into(),
+            Doc::Loading(_) => fill(tr("opening {0}"), &[&self.title()]).into(),
             Doc::Ready { image, .. } => {
                 format!("{}: {}x{}", self.title(), image.width(), image.height()).into()
             }
@@ -1329,16 +1350,21 @@ impl Root {
             .child(svg().path(icon("open")).size_8().text_color(t.border))
             .child(div().max_w_full().text_center().child(text))
             .when(!recents.is_empty(), |d| {
-                d.child(div().mt_4().text_size(theme::size::small()).child("recent"))
-                    .child(div().flex().flex_col().items_center().children(recents))
+                d.child(
+                    div()
+                        .mt_4()
+                        .text_size(theme::size::small())
+                        .child(tr("recent")),
+                )
+                .child(div().flex().flex_col().items_center().children(recents))
             })
     }
 
     fn status_bar(&self, t: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let mut parts: Vec<String> = match &self.doc {
             Doc::Ready { image, .. } => status_parts(image, self.output.as_deref(), self),
-            Doc::Loading(_) => vec!["loading".into()],
-            Doc::Failed(_) => vec!["error".into()],
+            Doc::Loading(_) => vec![tr("loading").into()],
+            Doc::Failed(_) => vec![tr("error").into()],
             Doc::Empty => Vec::new(),
         };
         if let Some(n) = &self.notice {
@@ -1369,7 +1395,7 @@ impl Root {
                         .cursor_pointer()
                         .hover(|d| d.bg(t.elevated))
                         .on_click(cx.listener(|this, _, _, cx| this.convert(false, cx)))
-                        .child("preview, click for exact"),
+                        .child(tr("preview, click for exact")),
                 )
             })
     }
@@ -1431,7 +1457,7 @@ fn status_parts(image: &Image, out: Option<&Image>, root: &Root) -> Vec<String> 
     let Some(out) = out else { return v };
     v[0] = format!("{} -> {} x {}", v[0], out.width(), out.height());
     let used = root.strip.counts.iter().filter(|&&n| n > 0).count();
-    v.push(format!("{used} colors"));
+    v.push(fill(tr("{0} colors"), &[&used]));
     v.push(root.settings.dither.mode.name().to_string());
     if let Some((took, report)) = &root.last_run {
         let stages = crate::trace::stages(report);
@@ -1472,7 +1498,10 @@ fn batch(images: &[PathBuf], dir: &std::path::Path, settings: &Settings) -> Stri
         });
         if done.is_ok() { ok += 1 } else { failed += 1 }
     }
-    format!("{ok} converted into {}, {failed} failed", dir.display())
+    fill(
+        tr("{0} converted into {1}, {2} failed"),
+        &[&ok, &dir.display(), &failed],
+    )
 }
 
 /// Width taken by the open panels, for layout math.
@@ -1550,9 +1579,9 @@ impl Render for Root {
                 this.config.reduced_motion = !this.config.reduced_motion;
                 this.notice = Some(
                     if this.config.reduced_motion {
-                        "transitions off"
+                        tr("transitions off")
                     } else {
-                        "transitions on"
+                        tr("transitions on")
                     }
                     .into(),
                 );
@@ -1587,7 +1616,7 @@ impl Render for Root {
                     theme::Variant::from_index((v.index() + 1) % theme::Variant::ALL.len() as u8);
                 Theme::set(next, cx);
                 this.apply_theme(cx);
-                this.notice = Some(format!("theme: {}", next.name()).into());
+                this.notice = Some(fill(tr("theme: {0}"), &[&tr(next.name())]).into());
                 this.persist(cx);
             }))
             .on_action(cx.listener(|this, _: &AccentFromImage, _, cx| {
@@ -1619,12 +1648,25 @@ impl Render for Root {
                 this.config.resident = !this.config.resident;
                 this.notice = Some(
                     if this.config.resident {
-                        "stay resident: on from the next start (ctrl+q quits)"
+                        tr("stay resident: on from the next start (ctrl+q quits)")
                     } else {
-                        "stay resident: off from the next start"
+                        tr("stay resident: off from the next start")
                     }
                     .into(),
                 );
+                this.persist(cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Language, _, cx| {
+                let all = xd_art_text::Lang::ALL;
+                let at = all
+                    .iter()
+                    .position(|l| *l == xd_art_text::current())
+                    .unwrap_or(0);
+                let next = all[(at + 1) % all.len()];
+                xd_art_text::set(next);
+                this.config.language = Some(next);
+                this.notice = Some(fill(tr("language: {0}"), &[&next.name()]).into());
                 this.persist(cx);
                 cx.notify();
             }))
@@ -1643,7 +1685,7 @@ impl Render for Root {
             }))
             .on_action(cx.listener(|this, _: &KeepVariation, _, cx| {
                 let n = this.variations.items.len() + 1;
-                this.keep_variation(format!("version {n}"), this.settings.clone(), cx);
+                this.keep_variation(fill(tr("version {0}"), &[&n]), this.settings.clone(), cx);
             }))
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
                 if this.retouch.tool.paints() && this.retouch.undo() {

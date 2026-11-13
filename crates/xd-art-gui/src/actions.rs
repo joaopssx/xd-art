@@ -4,6 +4,7 @@
 //! shortcut sheet read [`SHORTCUTS`] so what they show cannot drift from what is bound.
 
 use gpui::{Action, App, KeyBinding, actions};
+use xd_art_text::mark;
 
 actions!(
     xd_art,
@@ -56,6 +57,8 @@ actions!(
         ToggleResident,
         /// Quit, also from a resident instance.
         Quit,
+        /// Switch between English and Portuguese.
+        Language,
     ]
 );
 
@@ -64,58 +67,71 @@ pub const CONTEXT: &str = "xd-art";
 
 /// `(keys on Windows and Linux, keys on macOS, what it does)`.
 pub const SHORTCUTS: &[(&str, &str, &str)] = &[
-    ("ctrl-o", "cmd-o", "open an image"),
-    ("ctrl-[", "cmd-[", "show or hide the settings panel"),
-    ("ctrl-]", "cmd-]", "show or hide the information panel"),
-    ("ctrl-0", "cmd-0", "fit the image into the view"),
-    ("ctrl-1", "cmd-1", "show the image at 100%"),
-    ("ctrl-=", "cmd-=", "zoom in"),
-    ("ctrl--", "cmd--", "zoom out"),
-    ("ctrl-g", "cmd-g", "show or hide the pixel grid"),
+    ("ctrl-o", "cmd-o", mark("open an image")),
+    ("ctrl-[", "cmd-[", mark("show or hide the settings panel")),
+    (
+        "ctrl-]",
+        "cmd-]",
+        mark("show or hide the information panel"),
+    ),
+    ("ctrl-0", "cmd-0", mark("fit the image into the view")),
+    ("ctrl-1", "cmd-1", mark("show the image at 100%")),
+    ("ctrl-=", "cmd-=", mark("zoom in")),
+    ("ctrl--", "cmd--", mark("zoom out")),
+    ("ctrl-g", "cmd-g", mark("show or hide the pixel grid")),
     (
         "ctrl-b",
         "cmd-b",
-        "before and after: divider, source only, off",
+        mark("before and after: divider, source only, off"),
     ),
-    ("ctrl-d", "cmd-d", "dither gallery"),
-    ("ctrl-z", "cmd-z", "undo"),
-    ("ctrl-shift-z", "cmd-shift-z", "redo"),
-    ("ctrl-e", "cmd-e", "variations side by side"),
+    ("ctrl-d", "cmd-d", mark("dither gallery")),
+    ("ctrl-z", "cmd-z", mark("undo")),
+    ("ctrl-shift-z", "cmd-shift-z", mark("redo")),
+    ("ctrl-e", "cmd-e", mark("variations side by side")),
     (
         "ctrl-shift-e",
         "cmd-shift-e",
-        "keep current settings as a variation",
+        mark("keep current settings as a variation"),
     ),
-    ("ctrl-k", "cmd-k", "command palette"),
-    ("ctrl-/", "cmd-/", "list every shortcut"),
+    ("ctrl-k", "cmd-k", mark("command palette")),
+    ("ctrl-/", "cmd-/", mark("list every shortcut")),
     (
         "ctrl-t",
         "cmd-t",
-        "next theme: dark, darker, midnight, plum",
+        mark("next theme: dark, darker, midnight, plum"),
     ),
     (
         "ctrl-shift-t",
         "cmd-shift-t",
-        "accent color from the image on or off",
+        mark("accent color from the image on or off"),
     ),
     (
         "f11",
         "cmd-ctrl-f",
-        "image only, full screen (escape leaves)",
+        mark("image only, full screen (escape leaves)"),
     ),
-    ("ctrl-shift-m", "cmd-shift-m", "transitions off or on"),
-    ("ctrl-s", "cmd-s", "export, recipes and palette import"),
+    ("ctrl-shift-m", "cmd-shift-m", mark("transitions off or on")),
+    (
+        "ctrl-s",
+        "cmd-s",
+        mark("export, recipes and palette import"),
+    ),
     (
         "ctrl-shift-d",
         "cmd-shift-d",
-        "startup and conversion times",
+        mark("startup and conversion times"),
     ),
     (
         "ctrl-shift-r",
         "cmd-shift-r",
-        "stay resident after closing, on or off",
+        mark("stay resident after closing, on or off"),
     ),
-    ("ctrl-q", "cmd-q", "quit"),
+    ("ctrl-q", "cmd-q", mark("quit")),
+    (
+        "ctrl-shift-l",
+        "cmd-shift-l",
+        mark("language: English or Portuguese"),
+    ),
 ];
 
 /// The action of [`SHORTCUTS`] entry `i`, to run it from the command palette.
@@ -144,7 +160,8 @@ pub fn command(i: usize) -> Box<dyn Action> {
         20 => Box::new(ExportPanel),
         21 => Box::new(DevOverlay),
         22 => Box::new(ToggleResident),
-        _ => Box::new(Quit),
+        23 => Box::new(Quit),
+        _ => Box::new(Language),
     }
 }
 
@@ -179,6 +196,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(21), DevOverlay, c),
         KeyBinding::new(k(22), ToggleResident, c),
         KeyBinding::new(k(23), Quit, c),
+        KeyBinding::new(k(24), Language, c),
     ]);
 }
 
@@ -190,7 +208,7 @@ mod tests {
     fn every_shortcut_has_a_command() {
         // command() falls through to the last action, so the list and the match have
         // to stay the same length; the names make a mismatch obvious.
-        assert_eq!(command(SHORTCUTS.len() - 1).name(), Quit.name());
+        assert_eq!(command(SHORTCUTS.len() - 1).name(), Language.name());
         assert_eq!(command(0).name(), Open.name());
     }
 }

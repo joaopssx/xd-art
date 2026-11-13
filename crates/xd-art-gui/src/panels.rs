@@ -12,6 +12,7 @@ use xd_art_core::settings::{
 use crate::app::Root;
 use crate::assets::icon;
 use crate::theme::{self, Palette};
+use xd_art_text::{mark, tr};
 
 /// The sections, in pipeline order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,13 +48,13 @@ impl Section {
     /// The heading.
     pub fn title(self) -> &'static str {
         match self {
-            Self::Input => "Input",
-            Self::Prepare => "Prepare",
-            Self::Sampling => "Sampling",
-            Self::Color => "Color",
-            Self::Dithering => "Dithering",
-            Self::Post => "Post",
-            Self::Output => "Output",
+            Self::Input => mark("Input"),
+            Self::Prepare => mark("Prepare"),
+            Self::Sampling => mark("Sampling"),
+            Self::Color => mark("Color"),
+            Self::Dithering => mark("Dithering"),
+            Self::Post => mark("Post"),
+            Self::Output => mark("Output"),
         }
     }
 }
@@ -105,8 +106,8 @@ fn palette_names() -> Vec<SharedString> {
         .iter()
         .map(|b| SharedString::from(b.name))
         .collect();
-    v.push("from the image".into());
-    v.push("loaded file".into());
+    v.push(tr("from the image").into());
+    v.push(tr("loaded file").into());
     v
 }
 
@@ -141,9 +142,9 @@ const QUANTIZERS: [Quantizer; 3] = [Quantizer::KMeans, Quantizer::MedianCut, Qua
 
 fn quantizer_name(q: Quantizer) -> &'static str {
     match q {
-        Quantizer::KMeans => "k-means",
-        Quantizer::MedianCut => "median cut",
-        Quantizer::Balanced => "balanced",
+        Quantizer::KMeans => tr("k-means"),
+        Quantizer::MedianCut => tr("median cut"),
+        Quantizer::Balanced => tr("balanced"),
     }
 }
 
@@ -152,7 +153,7 @@ fn extracting(s: &Settings) -> bool {
 }
 
 fn preset_names() -> Vec<SharedString> {
-    let mut v = vec![SharedString::from("custom")];
+    let mut v = vec![SharedString::from(tr("custom"))];
     v.extend(
         xd_art_core::preset::PRESETS
             .iter()
@@ -166,7 +167,7 @@ pub fn choices() -> Vec<Choice> {
     vec![
         Choice {
             id: "preset",
-            label: "start from",
+            label: mark("start from"),
             section: Section::Input,
             options: preset_names,
             current: |s| {
@@ -187,7 +188,7 @@ pub fn choices() -> Vec<Choice> {
         },
         Choice {
             id: "sample-mode",
-            label: "mode",
+            label: mark("mode"),
             section: Section::Sampling,
             options: || names(&SampleMode::ALL, SampleMode::name),
             current: |s| {
@@ -201,9 +202,15 @@ pub fn choices() -> Vec<Choice> {
         },
         Choice {
             id: "size-kind",
-            label: "size",
+            label: mark("size"),
             section: Section::Sampling,
-            options: || vec!["fixed".into(), "fixed width".into(), "divide".into()],
+            options: || {
+                vec![
+                    tr("fixed").into(),
+                    tr("fixed width").into(),
+                    tr("divide").into(),
+                ]
+            },
             current: |s| match s.sample.size {
                 Size::Absolute {
                     keep_aspect: false, ..
@@ -236,7 +243,7 @@ pub fn choices() -> Vec<Choice> {
         },
         Choice {
             id: "palette",
-            label: "palette",
+            label: mark("palette"),
             section: Section::Color,
             options: palette_names,
             current: palette_index,
@@ -245,7 +252,7 @@ pub fn choices() -> Vec<Choice> {
         },
         Choice {
             id: "quantizer",
-            label: "method",
+            label: mark("method"),
             section: Section::Color,
             options: || names(&QUANTIZERS, quantizer_name),
             current: |s| match &s.colors.palette {
@@ -263,7 +270,7 @@ pub fn choices() -> Vec<Choice> {
         },
         Choice {
             id: "metric",
-            label: "distance",
+            label: mark("distance"),
             section: Section::Color,
             options: || names(&Metric::ALL, Metric::name),
             current: |s| {
@@ -277,7 +284,7 @@ pub fn choices() -> Vec<Choice> {
         },
         Choice {
             id: "dither",
-            label: "mode",
+            label: mark("mode"),
             section: Section::Dithering,
             options: || names(&DitherMode::ALL, DitherMode::name),
             current: |s| {
@@ -291,13 +298,13 @@ pub fn choices() -> Vec<Choice> {
         },
         Choice {
             id: "cleanup",
-            label: "stray pixels",
+            label: mark("stray pixels"),
             section: Section::Post,
             options: || {
                 vec![
-                    "keep".into(),
-                    "remove single dots".into(),
-                    "remove more".into(),
+                    tr("keep").into(),
+                    tr("remove single dots").into(),
+                    tr("remove more").into(),
                 ]
             },
             current: |s| usize::from(s.post.cleanup.min(2)),
@@ -312,7 +319,7 @@ pub fn toggles() -> Vec<Toggle> {
     vec![
         Toggle {
             id: "blur-compat",
-            label: "original blur",
+            label: mark("original blur"),
             section: Section::Prepare,
             get: |s| s.blur.box_approx,
             set: |s, v| s.blur.box_approx = v,
@@ -320,7 +327,7 @@ pub fn toggles() -> Vec<Toggle> {
         },
         Toggle {
             id: "outline",
-            label: "outline (color 0)",
+            label: mark("outline (color 0)"),
             section: Section::Post,
             get: |s| s.post.outline.is_some(),
             set: |s, v| s.post.outline = v.then_some(0),
@@ -328,7 +335,7 @@ pub fn toggles() -> Vec<Toggle> {
         },
         Toggle {
             id: "inline",
-            label: "inline (color 1)",
+            label: mark("inline (color 1)"),
             section: Section::Post,
             get: |s| s.post.inline.is_some(),
             set: |s, v| s.post.inline = v.then_some(1),
@@ -367,7 +374,7 @@ impl Root {
                             .size(px(12.0))
                             .text_color(t.muted),
                     )
-                    .child(section.title())
+                    .child(tr(section.title()))
                     .into_any_element(),
             );
             if !open {
@@ -437,7 +444,7 @@ impl Root {
                 };
                 cx.notify();
             }))
-            .child(div().text_color(t.muted).child(c.label))
+            .child(div().text_color(t.muted).child(tr(c.label)))
             .child(
                 div()
                     .text_color(t.text)
@@ -519,7 +526,7 @@ impl Root {
                     .border_color(if on { t.accent } else { t.border })
                     .when(on, |d| d.bg(t.accent)),
             )
-            .child(div().text_color(t.muted).child(g.label))
+            .child(div().text_color(t.muted).child(tr(g.label)))
             .into_any_element()
     }
 }

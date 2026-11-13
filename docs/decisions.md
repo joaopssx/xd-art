@@ -318,3 +318,21 @@ The same commit fixes `cargo doc` with warnings denied, which had failed since t
 k-means scratch buffer was added: its public doc linked to a private function. The CI
 doc job would have caught it on the first push; my local check before each commit did
 not build the docs, and now does.
+
+## 2026-11-13: translations without a library (E17)
+
+English and Brazilian Portuguese, in a small crate (`xd-art-text`) shared by the app and
+the command line tool. The English text is the key; each language is a sorted table of
+pairs searched with a binary search. gettext or Fluent would bring a runtime, files to
+ship next to the binary and a build step for two languages and about 250 strings. A
+test reads the app's and the tool's sources and fails when a string given to `tr()` or
+`mark()` has no Portuguese, so a new string cannot be forgotten.
+
+The language comes from `XD_ART_LANG`, then `LC_ALL`, `LC_MESSAGES` and `LANG`, then on
+Windows the user's locale (`GetUserDefaultLocaleName`, the one `unsafe` call in the
+project outside the engine, documented at the call). Git Bash and other Unix-like
+shells on Windows set `LANG` themselves, so the tool follows the shell there. In the
+app, Ctrl+Shift+L switches between the two and the choice is saved in the config flags.
+
+What stays in English is listed in `CONTRIBUTING.md`: mainly names that are also
+command line values, engine error messages and machine-readable output.

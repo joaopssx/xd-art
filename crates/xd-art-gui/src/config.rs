@@ -6,7 +6,8 @@
 //! ```text
 //! "XDCF"  version: u8 (1)
 //! theme: u8   flags: u8 (bit 0 left panel open, bit 1 right panel open, bit 2 reduced
-//!   motion, bit 3 accent from the image, bit 4 stay resident)
+//!   motion, bit 3 accent from the image, bit 4 stay resident, bits 5-6 language:
+//!   0 follows the system, 1 English, 2 Portuguese)
 //! left width: f32   right width: f32
 //! recent count: u8, then for each: length: u16, UTF-8 path
 //! recipe: length: u32, UTF-8 recipe JSON of the last settings
@@ -38,6 +39,8 @@ pub struct Config {
     pub accent_from_image: bool,
     /// Start as a resident instance, as if `--resident` was given.
     pub resident: bool,
+    /// Interface language picked by hand; `None` follows the system.
+    pub language: Option<xd_art_text::Lang>,
     /// Left panel width.
     pub left_width: f32,
     /// Right panel width.
@@ -57,6 +60,7 @@ impl Default for Config {
             reduced_motion: false,
             accent_from_image: false,
             resident: false,
+            language: None,
             left_width: 290.0,
             right_width: 250.0,
             recents: Vec::new(),
@@ -77,7 +81,12 @@ impl Config {
                 | u8::from(self.right_open) << 1
                 | u8::from(self.reduced_motion) << 2
                 | u8::from(self.accent_from_image) << 3
-                | u8::from(self.resident) << 4,
+                | u8::from(self.resident) << 4
+                | match self.language {
+                    None => 0,
+                    Some(xd_art_text::Lang::En) => 1,
+                    Some(xd_art_text::Lang::Pt) => 2,
+                } << 5,
         );
         b.extend_from_slice(&self.left_width.to_le_bytes());
         b.extend_from_slice(&self.right_width.to_le_bytes());
@@ -128,6 +137,11 @@ impl Config {
             reduced_motion: flags & 4 != 0,
             accent_from_image: flags & 8 != 0,
             resident: flags & 16 != 0,
+            language: match (flags >> 5) & 3 {
+                1 => Some(xd_art_text::Lang::En),
+                2 => Some(xd_art_text::Lang::Pt),
+                _ => None,
+            },
             left_width,
             right_width,
             recents,

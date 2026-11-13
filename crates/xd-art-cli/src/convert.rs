@@ -10,6 +10,7 @@ use xd_art_core::settings::Mask;
 use xd_art_core::{Error, anim, export, io};
 
 use crate::args::Options;
+use xd_art_text::{fill, tr};
 
 /// What a conversion produced, for the human and the JSON report.
 #[derive(Debug, Clone)]
@@ -49,7 +50,10 @@ pub fn run(input: &Path, output: &Path, o: &Options) -> Result<Outcome, Error> {
     if output.exists() && !o.overwrite {
         return Err(Error::Invalid {
             name: "output",
-            reason: format!("{} exists, use --force to replace it", output.display()),
+            reason: fill(
+                tr("{0} exists, use --force to replace it"),
+                &[&output.display()],
+            ),
         });
     }
     let mut settings = o.settings.clone();

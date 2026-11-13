@@ -8,6 +8,7 @@ use gpui::{AnyElement, Context, KeyDownEvent, SharedString, Window, div, prelude
 use crate::actions::{self, SHORTCUTS};
 use crate::app::Root;
 use crate::theme::{self, Palette};
+use xd_art_text::tr;
 
 /// State of the palette.
 #[derive(Debug, Default)]
@@ -26,7 +27,11 @@ pub struct Commands {
 pub fn matches(query: &str) -> Vec<usize> {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     (0..SHORTCUTS.len())
-        .filter(|&i| words.iter().all(|w| SHORTCUTS[i].2.contains(w.as_str())))
+        .filter(|&i| {
+            // English and the current language both match, so typing either works.
+            let text = format!("{} {}", SHORTCUTS[i].2, tr(SHORTCUTS[i].2)).to_lowercase();
+            words.iter().all(|w| text.contains(w.as_str()))
+        })
         .collect()
 }
 
@@ -126,7 +131,7 @@ impl Root {
                     .child(
                         div()
                             .text_color(if sel { t.text } else { t.muted })
-                            .child(SHORTCUTS[i].2),
+                            .child(tr(SHORTCUTS[i].2)),
                     )
                     .child(
                         div()
@@ -156,13 +161,13 @@ impl Root {
     /// Every shortcut in a table.
     pub(crate) fn shortcut_sheet(&self, t: Palette) -> AnyElement {
         overlay(t)
-            .child(div().text_size(theme::size::title()).child("Shortcuts"))
+            .child(div().text_size(theme::size::title()).child(tr("Shortcuts")))
             .children((0..SHORTCUTS.len()).map(|i| {
                 div()
                     .flex()
                     .justify_between()
                     .gap_4()
-                    .child(div().text_color(t.muted).child(SHORTCUTS[i].2))
+                    .child(div().text_color(t.muted).child(tr(SHORTCUTS[i].2)))
                     .child(div().font(theme::number_font()).child(keys(i)))
             }))
             .child(
@@ -170,7 +175,7 @@ impl Root {
                     .mt_2()
                     .text_size(theme::size::small())
                     .text_color(t.muted)
-                    .child("escape closes"),
+                    .child(tr("escape closes")),
             )
             .into_any_element()
     }

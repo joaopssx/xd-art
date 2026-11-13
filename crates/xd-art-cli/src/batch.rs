@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::args::{Options, Usage};
+use xd_art_text::{fill, tr};
 
 const IMAGE_EXTS: [&str; 7] = ["png", "jpg", "jpeg", "bmp", "tga", "qoi", "gif"];
 
@@ -84,10 +85,10 @@ pub fn expand(inputs: &[String], recursive: bool) -> Result<Vec<PathBuf>, String
                 },
                 &mut out,
             )
-            .map_err(|e| format!("could not read {}: {e}", dir.display()))?;
+            .map_err(|e| fill(tr("could not read {0}: {1}"), &[&dir.display(), &e]))?;
         } else if p.is_dir() {
             walk(p, recursive, &is_image, &mut out)
-                .map_err(|e| format!("could not read {}: {e}", p.display()))?;
+                .map_err(|e| fill(tr("could not read {0}: {1}"), &[&p.display(), &e]))?;
         } else {
             out.push(p.to_path_buf());
         }
@@ -161,20 +162,24 @@ pub fn run(mut p: lexopt::Parser) -> Result<bool, Usage> {
             "r" | "recursive" => recursive = true,
             "next-to-input" => next_to_input = true,
             "texture-names" => texture_names = true,
-            other => return Err(Usage(format!("unknown option {other}, try --help"))),
+            other => return Err(Usage(fill(tr("unknown option {0}, try --help"), &[&other]))),
         }
     }
     if inputs.is_empty() {
         return Err(Usage(
-            "batch needs at least one file, folder or pattern".into(),
+            tr("batch needs at least one file, folder or pattern").into(),
         ));
     }
     let out_dir = match (out_dir, next_to_input) {
         (Some(_), true) => {
-            return Err(Usage("use either -o or --next-to-input, not both".into()));
+            return Err(Usage(
+                tr("use either -o or --next-to-input, not both").into(),
+            ));
         }
         (None, false) => {
-            return Err(Usage("batch needs -o <folder> or --next-to-input".into()));
+            return Err(Usage(
+                tr("batch needs -o <folder> or --next-to-input").into(),
+            ));
         }
         (dir, _) => dir,
     };
@@ -185,7 +190,7 @@ pub fn run(mut p: lexopt::Parser) -> Result<bool, Usage> {
     let files = expand(&inputs, recursive).map_err(Usage)?;
     if let Some(dir) = &out_dir {
         std::fs::create_dir_all(dir)
-            .map_err(|e| Usage(format!("could not create {}: {e}", dir.display())))?;
+            .map_err(|e| Usage(fill(tr("could not create {0}: {1}"), &[&dir.display(), &e])))?;
     }
     let size = match o.settings.sample.size {
         xd_art_core::settings::Size::Absolute { width, .. } => width,
@@ -238,7 +243,10 @@ pub fn run(mut p: lexopt::Parser) -> Result<bool, Usage> {
     if o.json {
         println!("{{\"summary\":true,\"converted\":{done},\"failed\":{failed}}}");
     } else if !o.quiet {
-        println!("{done} converted, {failed} failed");
+        println!(
+            "{}",
+            fill(tr("{0} converted, {1} failed"), &[&done, &failed])
+        );
     }
     Ok(failed == 0)
 }

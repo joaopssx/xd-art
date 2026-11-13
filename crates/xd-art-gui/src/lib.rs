@@ -60,6 +60,7 @@ pub fn run() {
     paths.retain(|p| p.as_os_str() != "--resident");
     // The one file read before the window: a few hundred bytes of preferences.
     let config = config::load();
+    xd_art_text::set(config.language.unwrap_or_else(xd_art_text::detect));
     let config_read = Instant::now();
     trace::mark(start, "config", config_read);
     let server = if resident_flag || config.resident {

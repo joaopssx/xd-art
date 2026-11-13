@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use gpui::{App, Font, FontFeatures, FontWeight, Global, Hsla, Pixels, Rgba, px, rgb};
+use xd_art_text::mark;
 
 /// One theme's colors.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -52,10 +53,10 @@ impl Variant {
     /// Name for menus and the config file.
     pub fn name(self) -> &'static str {
         match self {
-            Self::Dark => "dark",
-            Self::Darker => "darker",
-            Self::Midnight => "midnight",
-            Self::Plum => "plum",
+            Self::Dark => mark("dark"),
+            Self::Darker => mark("darker"),
+            Self::Midnight => mark("midnight"),
+            Self::Plum => mark("plum"),
         }
     }
 

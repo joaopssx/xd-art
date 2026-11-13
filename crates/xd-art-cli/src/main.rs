@@ -14,6 +14,7 @@ use lexopt::prelude::*;
 use xd_art_core::settings::{DitherMode, Metric, SampleMode};
 
 use args::{Options, Usage};
+use xd_art_text::{fill, tr};
 
 const HELP: &str = "\
 xd-art-cli: convert images to pixel art
@@ -73,7 +74,79 @@ other:
   -q, --quiet                 no output on success
   -f, --force                 replace existing output files
   -j, --threads <n>           worker threads (default: all cores)
+
+The language follows the system; XD_ART_LANG=en or XD_ART_LANG=pt picks one.
 ";
+
+const HELP_PT: &str = "\
+xd-art-cli: converte imagens em pixel art
+
+uso:
+  xd-art-cli convert <entrada> -o <saída> [opções]
+  xd-art-cli batch <arquivos, pastas ou padrões>... -o <pasta> [opções]
+  xd-art-cli run <script.lua> [args]...     (ou: --script <arquivo>)
+  xd-art-cli info <arquivo>...
+  xd-art-cli list <palettes|presets|samplers|metrics|dithers>
+  xd-art-cli --version
+
+tamanho e amostragem:
+  -w, --width <px>            largura final (padrão 64)
+  -h, --height <px>           altura final (padrão 64)
+      --keep-aspect           a altura acompanha a largura
+      --divide <n|nxm>        divide o tamanho da imagem em vez disso
+      --sample <modo>         nearest, bilinear, bicubic, lanczos, box, cluster, edge
+      --offset <x,y>          deslocamento da amostra em pixels da saída, -1..1
+      --edge-strength <0..1>  para --sample edge
+preparar e ajustar:
+      --blur <raio>           desfoque antes da amostragem
+      --blur-compat           usa o desfoque em caixa do programa original
+      --sharpen <valor>       --brightness <-1..1>  --contrast <x>  --saturation <x>
+      --hue <graus>           --gamma <x>  --tint <rrggbb>  --tint-strength <0..1>
+cores:
+  -p, --palette <nome|arq>    nome embutido ou arquivo .gpl/.hex/.pal/.png
+      --extract <n>           monta uma paleta de n cores a partir da imagem
+      --method <nome>         k-means, median-cut ou balanced
+      --lock <rrggbb>         mantém esta cor ao extrair (pode repetir)
+      --lospec <nome|link>    baixa uma paleta do lospec.com (se compilado com isso)
+      --metric <nome>         rgb, weighted, redmean, cie76, cie94, ciede2000
+dithering:
+  -d, --dither <modo>         veja `list dithers`
+      --amount <0..1>         --alpha-threshold <0..255>  --target-colors <n>
+      --mask <imagem>         mapa em tons de cinza da força do dithering
+acabamento e saída:
+      --outline <índice>      --inline <índice>  --cleanup <0..2>  --merge <distância>
+  -s, --upscale <n>           repete cada pixel n vezes
+      --scanlines <0..1>      --crt <0..1>
+      --gif-palette <modo>    shared ou per-frame, para saída animada
+      --handoff <pasta>       também grava png indexado, .gpl, .hex e .json lá
+arquivos de configuração:
+      --preset <nome>         começa de um estilo pronto
+      --recipe <arquivo>      começa de uma receita (ou de um preset do SLK_img2pixel)
+      --save-recipe <arq>     grava as configurações usadas
+lote:
+  -r, --recursive             entra nas subpastas
+      --format <ext>          formato de saída (padrão: o da entrada, png para jpeg)
+      --suffix <texto>        acrescentado ao nome de cada saída
+      --texture-names         nomes em minúsculas com o tamanho, como oak_log_16.png
+      --next-to-input         grava cada resultado ao lado da origem (em vez de -o),
+                              com o nome <nome>-px, a menos que --suffix diga outro
+outros:
+      --suggest               mostra um tamanho sugerido e sai
+      --json                  saída para outros programas lerem
+  -q, --quiet                 nada na saída quando dá certo
+  -f, --force                 substitui arquivos de saída que já existem
+  -j, --threads <n>           threads de trabalho (padrão: todos os núcleos)
+
+O idioma vem do sistema; XD_ART_LANG=en ou XD_ART_LANG=pt escolhe um.
+";
+
+/// The help text in the current language.
+fn help() -> &'static str {
+    match xd_art_text::current() {
+        xd_art_text::Lang::En => HELP,
+        xd_art_text::Lang::Pt => HELP_PT,
+    }
+}
 
 fn lospec(name: &str) -> Result<Vec<[u8; 3]>, String> {
     #[cfg(feature = "online-palettes")]
@@ -101,7 +174,7 @@ fn lospec(name: &str) -> Result<Vec<[u8; 3]>, String> {
     #[cfg(not(feature = "online-palettes"))]
     {
         let _ = name;
-        Err("this build has no lospec support (feature online-palettes)".into())
+        Err(tr("this build has no lospec support (feature online-palettes)").into())
     }
 }
 
@@ -110,7 +183,7 @@ fn print_list(what: &str) -> Result<(), Usage> {
         "palettes" => {
             for b in xd_art_core::palette::BUILTINS {
                 let n = xd_art_core::palette::builtin(b.name).map_or(0, |p| p.len());
-                println!("{:<12} {n:>3} colors  {}", b.name, b.source);
+                println!("{:<12} {n:>3} {}  {}", b.name, tr("colors"), b.source);
             }
         }
         "presets" => {
@@ -126,8 +199,9 @@ fn print_list(what: &str) -> Result<(), Usage> {
             .iter()
             .for_each(|m| println!("{}", m.name())),
         other => {
-            return Err(Usage(format!(
-                "cannot list {other}: palettes, presets, samplers, metrics or dithers"
+            return Err(Usage(fill(
+                tr("cannot list {0}: palettes, presets, samplers, metrics or dithers"),
+                &[&other],
             )));
         }
     }
@@ -148,7 +222,11 @@ fn info(files: &[PathBuf]) -> bool {
         };
         match probed {
             Ok((w, h, 1)) => println!("{}: {w}x{h}", f.display()),
-            Ok((w, h, n)) => println!("{}: {w}x{h}, {n} frames", f.display()),
+            Ok((w, h, n)) => println!(
+                "{}: {w}x{h}, {}",
+                f.display(),
+                fill(tr("{0} frames"), &[&n])
+            ),
             Err(e) => {
                 eprintln!("{e}");
                 ok = false;
@@ -163,17 +241,17 @@ fn report(out: &convert::Outcome, json: bool) {
         println!("{}", crate::json_line(out, None));
     } else {
         let frames = if out.frames > 1 {
-            format!(", {} frames", out.frames)
+            format!(", {}", fill(tr("{0} frames"), &[&out.frames]))
         } else {
             String::new()
         };
         println!(
-            "{} -> {} ({}x{}, {} colors{frames}, {:.0} ms)",
+            "{} -> {} ({}x{}, {}{frames}, {:.0} ms)",
             out.input.display(),
             out.output.display(),
             out.width,
             out.height,
-            out.colors,
+            fill(tr("{0} colors"), &[&out.colors]),
             out.millis
         );
     }
@@ -215,9 +293,9 @@ fn run_convert(mut p: lexopt::Parser) -> Result<bool, Usage> {
                 continue;
             }
             Value(v) => {
-                return Err(Usage(format!(
-                    "unexpected argument {}",
-                    v.to_string_lossy()
+                return Err(Usage(fill(
+                    tr("unexpected argument {0}"),
+                    &[&v.to_string_lossy()],
                 )));
             }
         };
@@ -227,13 +305,13 @@ fn run_convert(mut p: lexopt::Parser) -> Result<bool, Usage> {
         match key.as_str() {
             "o" | "output" => output = Some(PathBuf::from(p.value()?)),
             "help" => {
-                print!("{HELP}");
+                print!("{}", help());
                 return Ok(true);
             }
-            other => return Err(Usage(format!("unknown option {other}, try --help"))),
+            other => return Err(Usage(fill(tr("unknown option {0}, try --help"), &[&other]))),
         }
     }
-    let input = input.ok_or_else(|| Usage("convert needs an input file".into()))?;
+    let input = input.ok_or_else(|| Usage(tr("convert needs an input file").into()))?;
     with_threads(o.threads, || {
         if o.suggest {
             return match convert::load_still(&input).and_then(|img| {
@@ -259,7 +337,7 @@ fn run_convert(mut p: lexopt::Parser) -> Result<bool, Usage> {
         }
         let output = output
             .clone()
-            .ok_or_else(|| Usage("convert needs -o <output>".into()))?;
+            .ok_or_else(|| Usage(tr("convert needs -o <output>").into()))?;
         Ok(match convert::run(&input, &output, &o) {
             Ok(out) => {
                 if !o.quiet || o.json {
@@ -315,8 +393,9 @@ fn run_script(p: &mut lexopt::Parser) -> Result<bool, Usage> {
     #[cfg(not(feature = "lua"))]
     {
         let _ = args;
-        Err(Usage(format!(
-            "cannot run {path}: this build has no Lua (feature lua)"
+        Err(Usage(fill(
+            tr("cannot run {0}: this build has no Lua (feature lua)"),
+            &[&path],
         )))
     }
 }
@@ -324,7 +403,7 @@ fn run_script(p: &mut lexopt::Parser) -> Result<bool, Usage> {
 fn run() -> Result<bool, Usage> {
     let mut p = lexopt::Parser::from_env();
     let Some(first) = p.next()? else {
-        print!("{HELP}");
+        print!("{}", help());
         return Ok(true);
     };
     match first {
@@ -333,7 +412,7 @@ fn run() -> Result<bool, Usage> {
             Ok(true)
         }
         Long("help") => {
-            print!("{HELP}");
+            print!("{}", help());
             Ok(true)
         }
         Long("script") => run_script(&mut p),
@@ -344,7 +423,7 @@ fn run() -> Result<bool, Usage> {
             "info" => {
                 let files: Vec<PathBuf> = p.raw_args()?.map(PathBuf::from).collect();
                 if files.is_empty() {
-                    return Err(Usage("info needs at least one file".into()));
+                    return Err(Usage(tr("info needs at least one file").into()));
                 }
                 Ok(info(&files))
             }
@@ -353,13 +432,17 @@ fn run() -> Result<bool, Usage> {
                 print_list(&what)?;
                 Ok(true)
             }
-            other => Err(Usage(format!("unknown command {other}, try --help"))),
+            other => Err(Usage(fill(
+                tr("unknown command {0}, try --help"),
+                &[&other],
+            ))),
         },
         other => Err(other.unexpected().into()),
     }
 }
 
 fn main() -> ExitCode {
+    xd_art_text::set(xd_art_text::detect());
     match run() {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),

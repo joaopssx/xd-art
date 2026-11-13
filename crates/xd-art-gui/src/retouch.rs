@@ -26,6 +26,7 @@ use xd_art_core::settings::Mask;
 
 use crate::app::{Doc, Root};
 use crate::theme::{self, Palette};
+use xd_art_text::{fill, mark, tr};
 
 /// What a left click on the preview does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -57,12 +58,12 @@ impl Tool {
 
     fn name(self) -> &'static str {
         match self {
-            Tool::Off => "off",
-            Tool::Pencil => "pencil",
-            Tool::Eraser => "eraser",
-            Tool::Picker => "picker",
-            Tool::NoDither => "no dither",
-            Tool::Dither => "dither",
+            Tool::Off => mark("off"),
+            Tool::Pencil => mark("pencil"),
+            Tool::Eraser => mark("eraser"),
+            Tool::Picker => mark("picker"),
+            Tool::NoDither => mark("no dither"),
+            Tool::Dither => mark("dither"),
         }
     }
 
@@ -508,12 +509,12 @@ impl Root {
             }
             Tool::Pencil | Tool::Eraser => {
                 if tool == Tool::Pencil && self.retouch.color.is_none() {
-                    self.notice = Some("pick a palette color first".into());
+                    self.notice = Some(tr("pick a palette color first").into());
                 }
                 self.retouch.begin(p, size);
                 if !self.retouch.drawing() {
                     self.notice = Some(
-                        "the retouches belong to another output size: clear them to paint here"
+                        tr("the retouches belong to another output size: clear them to paint here")
                             .into(),
                     );
                 }
@@ -643,8 +644,8 @@ impl Root {
                 .await;
             this.update(cx, |root, cx| {
                 root.notice = Some(match result {
-                    Ok(0) => "nothing to save: no retouches and no mask".into(),
-                    Ok(n) => format!("saved {n} file(s) next to the image").into(),
+                    Ok(0) => tr("nothing to save: no retouches and no mask").into(),
+                    Ok(n) => fill(tr("saved {0} file(s) next to the image"), &[&n]).into(),
                     Err(e) => e.into(),
                 });
                 cx.notify();
@@ -680,7 +681,7 @@ impl Root {
             .children(Tool::ALL.map(|tool| {
                 button(
                     format!("tool-{}", tool.name()).into(),
-                    tool.name().into(),
+                    tr(tool.name()).into(),
                     self.retouch.tool == tool,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -696,7 +697,7 @@ impl Root {
                 div()
                     .text_size(theme::size::small())
                     .text_color(t.muted)
-                    .child("brush"),
+                    .child(tr("brush")),
             )
             .children([1u32, 2, 4, 8].map(|s| {
                 button(
@@ -711,10 +712,10 @@ impl Root {
             }));
         let color = self.retouch.color;
         let info: SharedString = match (self.retouch.tool, color) {
-            (Tool::Pencil, None) => "click a palette color below to paint with it".into(),
-            (Tool::Pencil, Some(c)) => format!("painting {}", crate::strip::hex(c)).into(),
-            (Tool::Picker, _) => "click the image to take a color".into(),
-            (Tool::NoDither | Tool::Dither, _) => "paints where dithering applies".into(),
+            (Tool::Pencil, None) => tr("click a palette color below to paint with it").into(),
+            (Tool::Pencil, Some(c)) => fill(tr("painting {0}"), &[&crate::strip::hex(c)]).into(),
+            (Tool::Picker, _) => tr("click the image to take a color").into(),
+            (Tool::NoDither | Tool::Dither, _) => tr("paints where dithering applies").into(),
             _ => "".into(),
         };
         let stale = self.retouch.layer.as_ref().is_some_and(|l| {
@@ -729,7 +730,7 @@ impl Root {
                 .mt_3()
                 .text_size(theme::size::title())
                 .text_color(t.text)
-                .child("Retouch")
+                .child(tr("Retouch"))
                 .into_any_element(),
             tools.into_any_element(),
             sizes.into_any_element(),
@@ -751,7 +752,10 @@ impl Root {
                 div()
                     .text_size(theme::size::small())
                     .text_color(t.muted)
-                    .child(format!("retouches hidden: they were painted at {w} x {h}"))
+                    .child(fill(
+                        tr("retouches hidden: they were painted at {0} x {1}"),
+                        &[&w, &h],
+                    ))
                     .into_any_element(),
             );
         }
@@ -761,7 +765,7 @@ impl Root {
                 .flex_wrap()
                 .gap_1()
                 .child(
-                    button("retouch-clear".into(), "clear retouches".into(), false).on_click(
+                    button("retouch-clear".into(), tr("clear retouches").into(), false).on_click(
                         cx.listener(|this, _, _, cx| {
                             this.retouch.clear();
                             cx.notify();
@@ -769,16 +773,16 @@ impl Root {
                     ),
                 )
                 .child(
-                    button("mask-clear".into(), "clear mask".into(), false).on_click(cx.listener(
-                        |this, _, _, cx| {
+                    button("mask-clear".into(), tr("clear mask").into(), false).on_click(
+                        cx.listener(|this, _, _, cx| {
                             if this.settings.mask.take().is_some() {
                                 this.settings_changed(false, cx);
                             }
-                        },
-                    )),
+                        }),
+                    ),
                 )
                 .child(
-                    button("project-save".into(), "save with image".into(), false)
+                    button("project-save".into(), tr("save with image").into(), false)
                         .on_click(cx.listener(|this, _, _, cx| this.save_project(cx))),
                 )
                 .into_any_element(),

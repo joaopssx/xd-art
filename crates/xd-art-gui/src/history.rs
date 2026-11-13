@@ -14,6 +14,7 @@ use xd_art_core::settings::{PaletteSource, Settings, Size};
 use crate::app::Root;
 use crate::preview::Viewer;
 use crate::theme::{self, Palette};
+use xd_art_text::{fill, mark, tr};
 
 /// Most entries kept.
 pub const MAX_ENTRIES: usize = 200;
@@ -47,20 +48,22 @@ fn f(v: f32) -> String {
 /// A short name for the difference between two settings.
 pub fn describe(old: &Settings, new: &Settings) -> String {
     if old.dither.mode != new.dither.mode {
-        return format!("dithering: {}", new.dither.mode.name());
+        return fill(tr("dithering: {0}"), &[&new.dither.mode.name()]);
     }
     if old.colors.palette != new.colors.palette {
         return match &new.colors.palette {
-            PaletteSource::Builtin(n) => format!("palette: {n}"),
-            PaletteSource::Colors(c) => format!("palette: {} colors", c.len()),
-            PaletteSource::Extract { count, .. } => format!("palette: {count} from the image"),
+            PaletteSource::Builtin(n) => fill(tr("palette: {0}"), &[n]),
+            PaletteSource::Colors(c) => fill(tr("palette: {0} colors"), &[&c.len()]),
+            PaletteSource::Extract { count, .. } => {
+                fill(tr("palette: {0} from the image"), &[count])
+            }
         };
     }
     if old.colors.metric != new.colors.metric {
-        return format!("distance: {}", new.colors.metric.name());
+        return fill(tr("distance: {0}"), &[&new.colors.metric.name()]);
     }
     if old.sample.mode != new.sample.mode {
-        return format!("sampling: {}", new.sample.mode.name());
+        return fill(tr("sampling: {0}"), &[&new.sample.mode.name()]);
     }
     if old.sample.size != new.sample.size {
         return match new.sample.size {
@@ -68,49 +71,49 @@ pub fn describe(old: &Settings, new: &Settings) -> String {
                 width,
                 height,
                 keep_aspect: false,
-            } => format!("size: {width} x {height}"),
-            Size::Absolute { width, .. } => format!("size: {width} wide"),
-            Size::Relative { x, .. } => format!("size: divided by {x}"),
+            } => fill(tr("size: {0} x {1}"), &[&width, &height]),
+            Size::Absolute { width, .. } => fill(tr("size: {0} wide"), &[&width]),
+            Size::Relative { x, .. } => fill(tr("size: divided by {0}"), &[&x]),
         };
     }
     let a = (&old.adjust, &new.adjust);
     for (name, x, y) in [
-        ("brightness", a.0.brightness, a.1.brightness),
-        ("contrast", a.0.contrast, a.1.contrast),
-        ("saturation", a.0.saturation, a.1.saturation),
-        ("hue", a.0.hue, a.1.hue),
-        ("gamma", a.0.gamma, a.1.gamma),
-        ("sharpen", a.0.sharpen, a.1.sharpen),
-        ("blur", old.blur.radius, new.blur.radius),
-        ("dither amount", old.dither.amount, new.dither.amount),
-        ("offset x", old.sample.offset_x, new.sample.offset_x),
-        ("offset y", old.sample.offset_y, new.sample.offset_y),
+        (mark("brightness"), a.0.brightness, a.1.brightness),
+        (mark("contrast"), a.0.contrast, a.1.contrast),
+        (mark("saturation"), a.0.saturation, a.1.saturation),
+        (mark("hue"), a.0.hue, a.1.hue),
+        (mark("gamma"), a.0.gamma, a.1.gamma),
+        (mark("sharpen"), a.0.sharpen, a.1.sharpen),
+        (mark("blur"), old.blur.radius, new.blur.radius),
+        (mark("dither amount"), old.dither.amount, new.dither.amount),
+        (mark("offset x"), old.sample.offset_x, new.sample.offset_x),
+        (mark("offset y"), old.sample.offset_y, new.sample.offset_y),
     ] {
         if x != y {
-            return format!("{name}: {}", f(y));
+            return format!("{}: {}", tr(name), f(y));
         }
     }
     if old.post != new.post {
-        return "post-processing".into();
+        return tr("post-processing").into();
     }
     if old.output != new.output {
-        return format!("scale: {}x", new.output.scale);
+        return fill(tr("scale: {0}x"), &[&new.output.scale]);
     }
     if old.mask != new.mask {
         return if new.mask.is_some() {
-            "dither mask".into()
+            tr("dither mask").into()
         } else {
-            "mask cleared".into()
+            tr("mask cleared").into()
         };
     }
-    "settings".into()
+    tr("settings").into()
 }
 
 impl History {
     /// Starts the history at `s`.
     pub fn start(&mut self, s: &Settings) {
         self.entries = vec![Entry {
-            name: "opened".into(),
+            name: tr("opened").into(),
             settings: s.clone(),
             preview: None,
         }];

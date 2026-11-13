@@ -9,6 +9,7 @@ use xd_art_core::export::Effects;
 use xd_art_core::settings::{
     DitherMode, Metric, PaletteSource, Quantizer, SampleMode, Settings, Size,
 };
+use xd_art_text::{fill, tr};
 
 /// Everything `convert` and `batch` accept besides the input and output.
 #[derive(Debug, Default)]
@@ -40,13 +41,13 @@ fn hex(s: &str) -> Result<[u8; 3], Usage> {
     let t = s.trim_start_matches('#');
     let v = u32::from_str_radix(t, 16).ok().filter(|_| t.len() == 6);
     v.map(|n| [(n >> 16) as u8, (n >> 8) as u8, n as u8])
-        .ok_or_else(|| Usage(format!("{s} is not a color like ff8800")))
+        .ok_or_else(|| Usage(fill(tr("{0} is not a color like ff8800"), &[&s])))
 }
 
 fn num<T: std::str::FromStr>(name: &str, v: OsString) -> Result<T, Usage> {
     let s = v.string()?;
     s.parse()
-        .map_err(|_| Usage(format!("{name}: {s} is not a valid number")))
+        .map_err(|_| Usage(fill(tr("{0}: {1} is not a valid number"), &[&name, &s])))
 }
 
 /// Parses one option (given without dashes: `w`, `width`) that belongs to the
@@ -59,19 +60,24 @@ pub fn option(key: &str, p: &mut lexopt::Parser, o: &mut Options) -> Result<bool
         "preset" => {
             let name = p.value()?.string()?;
             let preset = xd_art_core::preset::find(&name).ok_or_else(|| {
-                Usage(format!(
-                    "no preset named {name}, see `xd-art-cli list presets`"
+                Usage(fill(
+                    tr("no preset named {0}, see `xd-art-cli list presets`"),
+                    &[&name],
                 ))
             })?;
             *s = preset.settings();
         }
         "recipe" => {
             let path = PathBuf::from(p.value()?);
-            let text = std::fs::read_to_string(&path)
-                .map_err(|e| Usage(format!("could not read recipe {}: {e}", path.display())))?;
+            let text = std::fs::read_to_string(&path).map_err(|e| {
+                Usage(fill(
+                    tr("could not read recipe {0}: {1}"),
+                    &[&path.display(), &e],
+                ))
+            })?;
             *s = xd_art_core::recipe::from_json(&text)
                 .or_else(|_| xd_art_core::recipe::from_original(&text))
-                .map_err(|e| Usage(format!("{}: {e}", path.display())))?;
+                .map_err(|e| Usage(fill(tr("{0}: {1}"), &[&path.display(), &e])))?;
         }
         "save-recipe" => o.save_recipe = Some(p.value()?.into()),
         "w" | "width" => {
@@ -122,7 +128,7 @@ pub fn option(key: &str, p: &mut lexopt::Parser, o: &mut Options) -> Result<bool
             let (x, y) = v.split_once('x').unwrap_or((&v, &v));
             let parse = |t: &str| {
                 t.parse::<u32>()
-                    .map_err(|_| Usage(format!("divide: {v} is not like 4 or 4x3")))
+                    .map_err(|_| Usage(fill(tr("divide: {0} is not like 4 or 4x3"), &[&v])))
             };
             s.sample.size = Size::Relative {
                 x: parse(x)?,
@@ -132,8 +138,9 @@ pub fn option(key: &str, p: &mut lexopt::Parser, o: &mut Options) -> Result<bool
         "sample" => {
             let v = p.value()?.string()?;
             s.sample.mode = SampleMode::from_name(&v).ok_or_else(|| {
-                Usage(format!(
-                    "unknown sampling mode {v}, see `xd-art-cli list samplers`"
+                Usage(fill(
+                    tr("unknown sampling mode {0}, see `xd-art-cli list samplers`"),
+                    &[&v],
                 ))
             })?;
         }
@@ -141,15 +148,15 @@ pub fn option(key: &str, p: &mut lexopt::Parser, o: &mut Options) -> Result<bool
             let v = p.value()?.string()?;
             let (x, y) = v
                 .split_once(',')
-                .ok_or_else(|| Usage(format!("offset: {v} is not like 0.25,-0.1")))?;
+                .ok_or_else(|| Usage(fill(tr("offset: {0} is not like 0.25,-0.1"), &[&v])))?;
             s.sample.offset_x = x
                 .trim()
                 .parse()
-                .map_err(|_| Usage(format!("offset: {x} is not a number")))?;
+                .map_err(|_| Usage(fill(tr("offset: {0} is not a number"), &[&x])))?;
             s.sample.offset_y = y
                 .trim()
                 .parse()
-                .map_err(|_| Usage(format!("offset: {y} is not a number")))?;
+                .map_err(|_| Usage(fill(tr("offset: {0} is not a number"), &[&y])))?;
         }
         "edge-strength" => s.sample.edge_strength = num("edge-strength", p.value()?)?,
         "blur" => s.blur.radius = num("blur", p.value()?)?,
@@ -169,8 +176,9 @@ pub fn option(key: &str, p: &mut lexopt::Parser, o: &mut Options) -> Result<bool
             } else {
                 let pal =
                     xd_art_core::palette::Palette::load(std::path::Path::new(&v)).map_err(|e| {
-                        Usage(format!(
-                            "{v} is not a built-in palette and could not be loaded: {e}"
+                        Usage(fill(
+                            tr("{0} is not a built-in palette and could not be loaded: {1}"),
+                            &[&v, &e],
                         ))
                     })?;
                 PaletteSource::Colors(pal.colors().to_vec())
@@ -199,8 +207,9 @@ pub fn option(key: &str, p: &mut lexopt::Parser, o: &mut Options) -> Result<bool
                 "median-cut" => Quantizer::MedianCut,
                 "balanced" => Quantizer::Balanced,
                 _ => {
-                    return Err(Usage(format!(
-                        "unknown palette method {v}: k-means, median-cut or balanced"
+                    return Err(Usage(fill(
+                        tr("unknown palette method {0}: k-means, median-cut or balanced"),
+                        &[&v],
                     )));
                 }
             };
@@ -231,14 +240,18 @@ pub fn option(key: &str, p: &mut lexopt::Parser, o: &mut Options) -> Result<bool
         "metric" => {
             let v = p.value()?.string()?;
             s.colors.metric = Metric::from_name(&v).ok_or_else(|| {
-                Usage(format!("unknown metric {v}, see `xd-art-cli list metrics`"))
+                Usage(fill(
+                    tr("unknown metric {0}, see `xd-art-cli list metrics`"),
+                    &[&v],
+                ))
             })?;
         }
         "d" | "dither" => {
             let v = p.value()?.string()?;
             s.dither.mode = DitherMode::from_name(&v).ok_or_else(|| {
-                Usage(format!(
-                    "unknown dither mode {v}, see `xd-art-cli list dithers`"
+                Usage(fill(
+                    tr("unknown dither mode {0}, see `xd-art-cli list dithers`"),
+                    &[&v],
                 ))
             })?;
         }
@@ -259,8 +272,9 @@ pub fn option(key: &str, p: &mut lexopt::Parser, o: &mut Options) -> Result<bool
                 "shared" => PaletteMode::Shared,
                 "per-frame" => PaletteMode::PerFrame,
                 _ => {
-                    return Err(Usage(format!(
-                        "gif-palette: {v} is not shared or per-frame"
+                    return Err(Usage(fill(
+                        tr("gif-palette: {0} is not shared or per-frame"),
+                        &[&v],
                     )));
                 }
             };

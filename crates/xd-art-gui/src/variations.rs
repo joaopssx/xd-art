@@ -17,6 +17,7 @@ use crate::app::Root;
 use crate::assets::icon;
 use crate::preview::Viewer;
 use crate::theme::{self, Palette};
+use xd_art_text::{fill, mark, tr};
 
 /// Most variations shown at once.
 pub const MAX: usize = 4;
@@ -118,7 +119,7 @@ impl Root {
                 let mut viewer = Viewer::default();
                 viewer.grid = false;
                 Variation {
-                    label: format!("{w} wide"),
+                    label: fill(tr("{0} wide"), &[&w]),
                     settings: s,
                     image: None,
                     viewer,
@@ -165,7 +166,7 @@ impl Root {
                 .await;
             this.update(cx, |root, cx| {
                 root.notice = Some(match done {
-                    Ok(p) => format!("saved {}", p.display()).into(),
+                    Ok(p) => fill(tr("saved {0}"), &[&p.display()]).into(),
                     Err(e) => e.to_string().into(),
                 });
                 cx.notify();
@@ -194,7 +195,7 @@ impl Root {
                             .cursor_pointer()
                             .text_color(t.muted)
                             .hover(|d| d.bg(t.elevated).text_color(t.text))
-                            .child(label)
+                            .child(tr(label))
                     };
                     div()
                         .flex_1()
@@ -226,17 +227,26 @@ impl Root {
                                         .child(v.label.clone()),
                                 )
                                 .child(
-                                    button("fav", if fav { "favorite" } else { "mark favorite" })
-                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                    button(
+                                        "fav",
+                                        if fav {
+                                            mark("favorite")
+                                        } else {
+                                            mark("mark favorite")
+                                        },
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
                                             this.variations.favorite =
                                                 if fav { None } else { Some(i) };
                                             cx.notify();
-                                        })),
+                                        },
+                                    )),
                                 )
-                                .child(button("export", "export").on_click(
+                                .child(button("export", mark("export")).on_click(
                                     cx.listener(move |this, _, _, cx| this.export_variation(i, cx)),
                                 ))
-                                .child(button("use", "use").on_click(cx.listener(
+                                .child(button("use", mark("use")).on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         this.settings = this.variations.items[i].settings.clone();
                                         this.variations.open = false;
@@ -272,7 +282,7 @@ impl Root {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let n = this.variations.items.len() + 1;
                                 this.keep_variation(
-                                    format!("version {n}"),
+                                    fill(tr("version {0}"), &[&n]),
                                     this.settings.clone(),
                                     cx,
                                 );
@@ -283,7 +293,7 @@ impl Root {
                                     .size(px(12.0))
                                     .text_color(t.muted),
                             )
-                            .child("keep current settings"),
+                            .child(tr("keep current settings")),
                     )
                     .child(
                         div()
@@ -293,9 +303,12 @@ impl Root {
                             .cursor_pointer()
                             .hover(|d| d.bg(t.elevated))
                             .on_click(cx.listener(|this, _, _, cx| this.size_variations(cx)))
-                            .child("sizes 32, 64, 128"),
+                            .child(tr("sizes 32, 64, 128")),
                     )
-                    .child(format!("{} of {MAX}", self.variations.items.len())),
+                    .child(fill(
+                        tr("{0} of {1}"),
+                        &[&self.variations.items.len(), &MAX],
+                    )),
             )
             .child(div().flex_1().min_h_0().flex().gap_2().children(cells))
     }

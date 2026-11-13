@@ -14,6 +14,7 @@ use gpui::{
 };
 
 use crate::theme::{self, Theme};
+use xd_art_text::tr;
 
 /// What a slider reports.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -230,7 +231,11 @@ impl Render for Slider {
                     .flex()
                     .justify_between()
                     .text_size(theme::size::body())
-                    .child(div().text_color(t.muted).child(self.spec.label.clone()))
+                    .child(
+                        div()
+                            .text_color(t.muted)
+                            .child(SharedString::from(tr(&self.spec.label).to_string())),
+                    )
                     .child(
                         div()
                             .id("value")
@@ -317,12 +322,13 @@ impl Render for Slider {
                         .text_color(t.muted)
                         .font(theme::number_font())
                         .child(format!(
-                            "{:.*} to {:.*}{}, double click resets to {:.*}",
+                            "{:.*} - {:.*}{}, {} {:.*}",
                             spec.decimals,
                             spec.min,
                             spec.decimals,
                             spec.max,
                             spec.unit,
+                            tr("double click resets to"),
                             spec.decimals,
                             spec.default
                         )),

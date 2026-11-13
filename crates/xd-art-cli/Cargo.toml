@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 xd-art-core = { path = "../xd-art-core" }
+xd-art-text = { path = "../xd-art-text" }
 lexopt = "0.3.2"
 xd-art-lua = { path = "../xd-art-lua", optional = true }
 

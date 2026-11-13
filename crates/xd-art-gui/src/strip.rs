@@ -18,6 +18,7 @@ use xd_art_core::settings::{PaletteSource, Quantizer};
 use crate::app::Root;
 use crate::assets::icon;
 use crate::theme::{self, Palette as Colors};
+use xd_art_text::{fill, mark, tr};
 
 /// A swatch being dragged.
 #[derive(Clone, Copy, Debug)]
@@ -266,18 +267,24 @@ impl Root {
             })
             .collect();
         let info: SharedString = if let Some((i, text)) = &self.strip.editing {
-            format!("color {i}: {text}   enter applies, escape cancels").into()
+            fill(
+                tr("color {0}: {1}   enter applies, escape cancels"),
+                &[&i, text],
+            )
+            .into()
         } else if let Some(i) = self.strip.hover.filter(|i| *i < self.strip.colors.len()) {
             let n = self.strip.counts.get(i).copied().unwrap_or(0);
-            format!(
-                "{}   {} pixels, {:.1}%",
-                hex(self.strip.colors[i]),
-                n,
-                n as f64 * 100.0 / total as f64
+            fill(
+                tr("{0}   {1} pixels, {2}%"),
+                &[
+                    &hex(self.strip.colors[i]),
+                    &n,
+                    &format!("{:.1}", n as f64 * 100.0 / total as f64),
+                ],
             )
             .into()
         } else {
-            format!("{} colors", self.strip.colors.len()).into()
+            fill(tr("{0} colors"), &[&self.strip.colors.len()]).into()
         };
         let menu = self.strip.menu.map(|i| {
             let item = |label: &'static str, what: &'static str| {
@@ -289,7 +296,7 @@ impl Root {
                     .cursor_pointer()
                     .hover(|d| d.bg(t.border))
                     .on_click(cx.listener(move |this, _, _, cx| this.menu_action(i, what, cx)))
-                    .child(label)
+                    .child(tr(label))
             };
             div()
                 .flex()
@@ -301,16 +308,16 @@ impl Root {
                 .border_color(t.border)
                 .child(item(
                     if locked.contains(&self.strip.colors.get(i).copied().unwrap_or_default()) {
-                        "unlock"
+                        mark("unlock")
                     } else {
-                        "lock"
+                        mark("lock")
                     },
                     "lock",
                 ))
-                .child(item("duplicate", "duplicate"))
-                .child(item("remove", "remove"))
-                .child(item("sort by lightness", "sort-luma"))
-                .child(item("sort by hue", "sort-hue"))
+                .child(item(mark("duplicate"), "duplicate"))
+                .child(item(mark("remove"), "remove"))
+                .child(item(mark("sort by lightness"), "sort-luma"))
+                .child(item(mark("sort by hue"), "sort-hue"))
         });
         div()
             .id("palette-strip")

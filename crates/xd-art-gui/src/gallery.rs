@@ -20,40 +20,41 @@ use xd_art_core::settings::{DitherMode, SampleMode, Settings};
 use crate::app::Root;
 use crate::preview::Viewer;
 use crate::theme::{self, Palette};
+use xd_art_text::tr;
 
 /// One line about each dither mode.
 pub fn dither_hint(m: DitherMode) -> &'static str {
     match m {
-        DitherMode::None => "closest color only; flat areas, hard edges",
+        DitherMode::None => tr("closest color only; flat areas, hard edges"),
         DitherMode::Bayer2
         | DitherMode::Bayer3
         | DitherMode::Bayer4
         | DitherMode::Bayer5
-        | DitherMode::Bayer8 => "ordered pattern; even texture, stable when the image changes",
-        DitherMode::Cluster4 | DitherMode::Cluster8 => "clustered dots, like print halftone",
-        DitherMode::Floyd => "error diffusion per channel; smooth gradients, some noise",
+        | DitherMode::Bayer8 => tr("ordered pattern; even texture, stable when the image changes"),
+        DitherMode::Cluster4 | DitherMode::Cluster8 => tr("clustered dots, like print halftone"),
+        DitherMode::Floyd => tr("error diffusion per channel; smooth gradients, some noise"),
         DitherMode::FloydMono => {
-            "error diffusion with the error averaged over channels; fewer color specks"
+            tr("error diffusion with the error averaged over channels; fewer color specks")
         }
         DitherMode::Stucki | DitherMode::Burkes | DitherMode::Sierra => {
-            "error diffusion over a wider area; softer"
+            tr("error diffusion over a wider area; softer")
         }
-        DitherMode::SierraTwoRow | DitherMode::SierraLite => "lighter error diffusion; crisper",
-        DitherMode::Picocad => "checker between the two closest colors, only in between",
-        DitherMode::MedianCut => "one palette color per region of the image; poster look",
+        DitherMode::SierraTwoRow | DitherMode::SierraLite => tr("lighter error diffusion; crisper"),
+        DitherMode::Picocad => tr("checker between the two closest colors, only in between"),
+        DitherMode::MedianCut => tr("one palette color per region of the image; poster look"),
     }
 }
 
 /// One line about each sampling mode.
 pub fn sample_hint(m: SampleMode) -> &'static str {
     match m {
-        SampleMode::Nearest => "one source pixel per output pixel; sharp, can miss thin lines",
-        SampleMode::Bilinear => "blend of four pixels; soft",
-        SampleMode::Bicubic => "blend of sixteen pixels; soft with some edge contrast",
-        SampleMode::Lanczos => "six by six blend; sharpest of the smooth ones",
-        SampleMode::Box => "average of the whole area; clean, a bit blurry",
-        SampleMode::Cluster => "most common color of the area; keeps flat colors",
-        SampleMode::Edge => "area average that keeps edges hard",
+        SampleMode::Nearest => tr("one source pixel per output pixel; sharp, can miss thin lines"),
+        SampleMode::Bilinear => tr("blend of four pixels; soft"),
+        SampleMode::Bicubic => tr("blend of sixteen pixels; soft with some edge contrast"),
+        SampleMode::Lanczos => tr("six by six blend; sharpest of the smooth ones"),
+        SampleMode::Box => tr("average of the whole area; clean, a bit blurry"),
+        SampleMode::Cluster => tr("most common color of the area; keeps flat colors"),
+        SampleMode::Edge => tr("area average that keeps edges hard"),
     }
 }
 

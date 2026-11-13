@@ -30,6 +30,7 @@ use xd_art_core::settings::Settings;
 use crate::app::Root;
 use crate::retouch::{self, Layer};
 use crate::theme::{self, Palette};
+use xd_art_text::{fill, mark, tr};
 
 /// Export panel state.
 #[derive(Debug)]
@@ -59,7 +60,7 @@ impl Default for Export {
 }
 
 /// Sheet layouts offered: label and columns (0 is one row).
-const SHEET_COLUMNS: [(&str, u32); 3] = [("grid", 8), ("row", 0), ("column", 1)];
+const SHEET_COLUMNS: [(&str, u32); 3] = [(mark("grid"), 8), (mark("row"), 0), (mark("column"), 1)];
 
 /// What to write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -203,12 +204,14 @@ fn run(job: &Job) -> xd_art_core::Result<String> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("sheet");
             xd_art_core::palette::Palette::new(stem.to_string(), colors)?.save(&gpl)?;
-            return Ok(format!(
-                "{} frames in {}, with {} and {}",
-                imgs.len(),
-                job.path.display(),
-                json.display(),
-                gpl.display()
+            return Ok(fill(
+                tr("{0} frames in {1}, with {2} and {3}"),
+                &[
+                    &imgs.len(),
+                    &job.path.display(),
+                    &json.display(),
+                    &gpl.display(),
+                ],
             ));
         }
         Kind::Handoff => {
@@ -222,10 +225,13 @@ fn run(job: &Job) -> xd_art_core::Result<String> {
             let dir = job.path.parent().map(PathBuf::from).unwrap_or_default();
             let palette = xd_art_core::palette::Palette::new(stem.clone(), pal)?;
             let h = xd_art_core::export::handoff(&ix, &palette, &job.settings, &dir, &stem)?;
-            return Ok(format!("{} files in {}", h.files.len(), dir.display()));
+            return Ok(fill(
+                tr("{0} files in {1}"),
+                &[&h.files.len(), &dir.display()],
+            ));
         }
     }
-    Ok(format!("saved {}", job.path.display()))
+    Ok(fill(tr("saved {0}"), &[&job.path.display()]))
 }
 
 impl Root {
@@ -312,7 +318,7 @@ impl Root {
             let done = std::fs::write(&path, text).map(|()| path);
             this.update(cx, |root, cx| {
                 root.notice = Some(match done {
-                    Ok(p) => format!("recipe saved to {}", p.display()).into(),
+                    Ok(p) => fill(tr("recipe saved to {0}"), &[&p.display()]).into(),
                     Err(e) => e.to_string().into(),
                 });
                 cx.notify();
@@ -371,7 +377,7 @@ impl Root {
     #[cfg(feature = "online-palettes")]
     fn import_lospec(&mut self, name: String, cx: &mut Context<Self>) {
         let cache = crate::config::path().and_then(|p| p.parent().map(|d| d.join("lospec")));
-        self.notice = Some(format!("asking lospec.com for {name}").into());
+        self.notice = Some(fill(tr("asking lospec.com for {0}"), &[&name]).into());
         cx.spawn(async move |this, cx| {
             let got = cx
                 .background_executor()
@@ -379,8 +385,9 @@ impl Root {
                 .await;
             this.update(cx, |root, cx| match got {
                 Ok(p) => {
-                    root.notice =
-                        Some(format!("{} ({} colors) from lospec.com", p.name, p.len()).into());
+                    root.notice = Some(
+                        fill(tr("{0} ({1} colors) from lospec.com"), &[&p.name, &p.len()]).into(),
+                    );
                     root.settings.colors.palette =
                         xd_art_core::settings::PaletteSource::Colors(p.colors().to_vec());
                     root.settings_changed(false, cx);
@@ -397,7 +404,7 @@ impl Root {
 
     #[cfg(not(feature = "online-palettes"))]
     fn import_lospec(&mut self, _name: String, cx: &mut Context<Self>) {
-        self.notice = Some("this build has no lospec import (feature online-palettes)".into());
+        self.notice = Some(tr("this build has no lospec import (feature online-palettes)").into());
         cx.notify();
     }
 
@@ -413,12 +420,12 @@ impl Root {
                 .rounded(px(3.0))
                 .cursor_pointer()
                 .hover(|d| d.bg(t.elevated))
-                .child(div().text_color(t.text).child(label))
+                .child(div().text_color(t.text).child(tr(label)))
                 .child(
                     div()
                         .text_color(t.muted)
                         .text_size(theme::size::small())
-                        .child(hint),
+                        .child(tr(hint)),
                 )
         };
         let toggle = |id: &'static str, label: &'static str, on: bool| {
@@ -437,7 +444,7 @@ impl Root {
                         .border_color(if on { t.accent } else { t.border })
                         .when(on, |d| d.bg(t.accent)),
                 )
-                .child(div().text_color(t.muted).child(label))
+                .child(div().text_color(t.muted).child(tr(label)))
         };
         let chip = |id: SharedString, label: SharedString, on: bool| {
             div()
@@ -469,7 +476,12 @@ impl Root {
             .border_1()
             .border_color(t.border)
             .text_size(theme::size::body())
-            .child(div().text_size(theme::size::title()).px_2().child("Export"))
+            .child(
+                div()
+                    .text_size(theme::size::title())
+                    .px_2()
+                    .child(tr("Export")),
+            )
             .child(
                 div()
                     .flex()
@@ -481,7 +493,7 @@ impl Root {
                             .text_size(theme::size::small())
                             .text_color(t.muted)
                             .mr_1()
-                            .child("scale"),
+                            .child(tr("scale")),
                     )
                     .children([1u32, 2, 4, 8].map(|k| {
                         chip(
@@ -500,19 +512,19 @@ impl Root {
             .child(
                 row(
                     "export-png",
-                    "PNG",
-                    "the result, scaled, with the effects below",
+                    mark("PNG"),
+                    mark("the result, scaled, with the effects below"),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.export(Kind::Png, cx))),
             )
             .child(
                 row(
                     "export-gif",
-                    "GIF",
+                    mark("GIF"),
                     if animated {
-                        "the animation, skipped frames left out"
+                        mark("the animation, skipped frames left out")
                     } else {
-                        "a still GIF"
+                        mark("a still GIF")
                     },
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.export(Kind::Gif, cx))),
@@ -520,8 +532,8 @@ impl Root {
             .child(
                 row(
                     "export-sheet",
-                    "sprite sheet",
-                    "frames in one PNG, plus JSON with positions",
+                    mark("sprite sheet"),
+                    mark("frames in one PNG, plus JSON with positions"),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.export(Kind::Sheet, cx))),
             )
@@ -536,12 +548,12 @@ impl Root {
                             .text_size(theme::size::small())
                             .text_color(t.muted)
                             .mr_1()
-                            .child("sheet"),
+                            .child(tr("sheet")),
                     )
                     .children(SHEET_COLUMNS.iter().map(|&(label, columns)| {
                         chip(
                             SharedString::from(format!("sheet-{label}")),
-                            label.into(),
+                            tr(label).into(),
                             self.export.sheet.columns == columns,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -552,7 +564,7 @@ impl Root {
                     .child(
                         chip(
                             "sheet-spacing".into(),
-                            "1 px apart".into(),
+                            tr("1 px apart").into(),
                             self.export.sheet.spacing > 0,
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -564,16 +576,16 @@ impl Root {
             .child(
                 row(
                     "export-texture",
-                    "block texture",
-                    "PNG named like oak_log_16.png, for resource packs",
+                    mark("block texture"),
+                    mark("PNG named like oak_log_16.png, for resource packs"),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.export(Kind::Texture, cx))),
             )
             .child(
                 row(
                     "export-handoff",
-                    "for an editor",
-                    "indexed PNG, .gpl, .hex and JSON",
+                    mark("for an editor"),
+                    mark("indexed PNG, .gpl, .hex and JSON"),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.export(Kind::Handoff, cx))),
             )
@@ -583,8 +595,8 @@ impl Root {
                     .gap_3()
                     .py_1()
                     .child(
-                        toggle("fx-scan", "scanlines", e.scanlines > 0.0).on_click(cx.listener(
-                            |this, _, _, cx| {
+                        toggle("fx-scan", mark("scanlines"), e.scanlines > 0.0).on_click(
+                            cx.listener(|this, _, _, cx| {
                                 this.export.effects.scanlines =
                                     if this.export.effects.scanlines > 0.0 {
                                         0.0
@@ -592,11 +604,11 @@ impl Root {
                                         0.35
                                     };
                                 cx.notify();
-                            },
-                        )),
+                            }),
+                        ),
                     )
                     .child(
-                        toggle("fx-crt", "crt curve", e.crt > 0.0).on_click(cx.listener(
+                        toggle("fx-crt", mark("crt curve"), e.crt > 0.0).on_click(cx.listener(
                             |this, _, _, cx| {
                                 this.export.effects.crt = if this.export.effects.crt > 0.0 {
                                     0.0
@@ -612,24 +624,24 @@ impl Root {
             .child(
                 row(
                     "recipe-save",
-                    "save recipe",
-                    "these settings as a small JSON file",
+                    mark("save recipe"),
+                    mark("these settings as a small JSON file"),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.save_recipe(cx))),
             )
             .child(
                 row(
                     "recipe-load",
-                    "load recipe or palette",
-                    "also works by dropping the file",
+                    mark("load recipe or palette"),
+                    mark("also works by dropping the file"),
                 )
                 .on_click(cx.listener(|this, _, window, cx| this.load_recipe(window, cx))),
             )
             .child(
                 row(
                     "lospec",
-                    "palette from lospec.com",
-                    "type a name or link, enter",
+                    mark("palette from lospec.com"),
+                    mark("type a name or link, enter"),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.export.lospec = Some(String::new());
@@ -654,7 +666,7 @@ impl Root {
                     .px_2()
                     .text_size(theme::size::small())
                     .text_color(t.muted)
-                    .child("escape closes"),
+                    .child(tr("escape closes")),
             )
             .into_any_element()
     }
