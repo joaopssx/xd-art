@@ -320,10 +320,26 @@ impl Viewer {
         before: Option<Arc<Image>>,
         background: [u8; 3],
     ) -> impl IntoElement {
+        self.element_at(
+            (self.zoom, self.origin, self.fitted),
+            image,
+            before,
+            background,
+        )
+    }
+
+    /// [`Viewer::element`] with the zoom, position and fit of another view, so several
+    /// views can move together while each keeps its own cached drawing.
+    pub fn element_at(
+        &self,
+        (zoom, origin, fitted): (f32, Point<f32>, bool),
+        image: Arc<Image>,
+        before: Option<Arc<Image>>,
+        background: [u8; 3],
+    ) -> impl IntoElement {
         let split = self.compare;
         let (bounds_cell, shown, cache) =
             (self.bounds.clone(), self.shown.clone(), self.cache.clone());
-        let (zoom, origin, fitted) = (self.zoom, self.origin, self.fitted);
         let grid = if self.grid { self.grid_strength } else { 0.0 };
         canvas(
             move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut App| {

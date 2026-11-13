@@ -16,6 +16,7 @@ pub mod panels;
 pub mod preview;
 pub mod strip;
 pub mod theme;
+pub mod variations;
 pub mod widgets;
 
 use std::path::PathBuf;

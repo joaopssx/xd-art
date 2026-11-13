@@ -19,8 +19,8 @@ use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Siz
 
 use crate::Marks;
 use crate::actions::{
-    self, ActualSize, Compare, Fit, Gallery, Open, Redo, ToggleGrid, ToggleLeft, ToggleRight, Undo,
-    ZoomIn, ZoomOut,
+    self, ActualSize, Compare, Fit, Gallery, KeepVariation, Open, Redo, ToggleGrid, ToggleLeft,
+    ToggleRight, Undo, Variations, ZoomIn, ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
@@ -131,20 +131,20 @@ pub struct Control {
 
 /// The application window's content.
 pub struct Root {
-    marks: Marks,
-    doc: Doc,
-    layout: Layout,
+    pub(crate) marks: Marks,
+    pub(crate) doc: Doc,
+    pub(crate) layout: Layout,
     /// The panel edge being dragged, if any.
-    resizing: Option<Side>,
-    focus: FocusHandle,
-    config: Config,
+    pub(crate) resizing: Option<Side>,
+    pub(crate) focus: FocusHandle,
+    pub(crate) config: Config,
     pub(crate) settings: Settings,
     /// One line for the status bar: what just happened.
-    notice: Option<SharedString>,
+    pub(crate) notice: Option<SharedString>,
     /// Bumped on every config change; a pending write only goes ahead if it is still
     /// the latest.
-    save_generation: u64,
-    viewer: Viewer,
+    pub(crate) save_generation: u64,
+    pub(crate) viewer: Viewer,
     pub(crate) controls: Vec<Control>,
     pub(crate) choices: Vec<Choice>,
     pub(crate) toggles: Vec<Toggle>,
@@ -153,21 +153,21 @@ pub struct Root {
     /// The choice whose option list is open.
     pub(crate) open_choice: Option<&'static str>,
     /// The converted image currently shown.
-    output: Option<Arc<Image>>,
+    pub(crate) output: Option<Arc<Image>>,
     /// The source at reduced size, for big images.
-    proxy: Option<Arc<Image>>,
+    pub(crate) proxy: Option<Arc<Image>>,
     /// Identifies the open image in the pipeline's cache.
-    source_id: u64,
+    pub(crate) source_id: u64,
     /// Bumped on every conversion request; results of older requests are dropped.
-    generation: u64,
+    pub(crate) generation: u64,
     /// The token of the running conversion.
-    cancel: Option<Cancel>,
+    pub(crate) cancel: Option<Cancel>,
     /// The pipeline, used by one background conversion at a time.
-    pipeline: Arc<Mutex<Pipeline>>,
+    pub(crate) pipeline: Arc<Mutex<Pipeline>>,
     /// How long the last shown conversion took, from request to result, and what ran.
-    last_run: Option<(Duration, Report)>,
+    pub(crate) last_run: Option<(Duration, Report)>,
     /// The image shown came from the reduced copy or a cheaper metric.
-    approximate: bool,
+    pub(crate) approximate: bool,
     /// The palette strip.
     pub(crate) strip: Strip,
     /// The dither gallery and hover previews.
@@ -176,6 +176,8 @@ pub struct Root {
     pub(crate) history: History,
     /// Settings are being restored from the history and must not be recorded.
     pub(crate) restoring: bool,
+    /// Versions side by side.
+    pub(crate) variations: crate::variations::Variations,
 }
 
 /// Wait after the last change before the exact conversion starts, so a burst of
@@ -236,6 +238,7 @@ impl Root {
             gallery: gallery::Gallery::default(),
             history: History::default(),
             restoring: false,
+            variations: crate::variations::Variations::default(),
         }
     }
 
@@ -650,6 +653,14 @@ impl Root {
     pub(crate) fn small_source(&self) -> Option<Arc<Image>> {
         match &self.doc {
             Doc::Ready { image, .. } => Some(self.proxy.clone().unwrap_or_else(|| image.clone())),
+            _ => None,
+        }
+    }
+
+    /// The open image at full size.
+    pub(crate) fn full_source(&self) -> Option<Arc<Image>> {
+        match &self.doc {
+            Doc::Ready { image, .. } => Some(image.clone()),
             _ => None,
         }
     }
@@ -1162,6 +1173,9 @@ impl Root {
         if self.gallery.open && matches!(self.doc, Doc::Ready { .. }) {
             return base.child(self.gallery_view(t, cx));
         }
+        if self.variations.open && matches!(self.doc, Doc::Ready { .. }) {
+            return base.child(self.variations_view(t, cx));
+        }
         if let Doc::Ready { image, .. } = &self.doc {
             let bg = [t.base.r, t.base.g, t.base.b].map(|v| (v * 255.0).round() as u8);
             let shown = self.output.clone().unwrap_or_else(|| image.clone());
@@ -1345,6 +1359,14 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Gallery, _, cx| this.toggle_gallery(cx)))
+            .on_action(cx.listener(|this, _: &Variations, _, cx| {
+                this.variations.open = !this.variations.open;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &KeepVariation, _, cx| {
+                let n = this.variations.items.len() + 1;
+                this.keep_variation(format!("version {n}"), this.settings.clone(), cx);
+            }))
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
                 if let Some(s) = this.history.undo() {
                     this.restore(s, cx);

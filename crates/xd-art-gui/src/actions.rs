@@ -32,6 +32,10 @@ actions!(
         Undo,
         /// Redo the change undone last.
         Redo,
+        /// Show or hide the variations side by side.
+        Variations,
+        /// Keep the current settings as a variation.
+        KeepVariation,
     ]
 );
 
@@ -56,6 +60,12 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("ctrl-d", "cmd-d", "dither gallery"),
     ("ctrl-z", "cmd-z", "undo"),
     ("ctrl-shift-z", "cmd-shift-z", "redo"),
+    ("ctrl-e", "cmd-e", "variations side by side"),
+    (
+        "ctrl-shift-e",
+        "cmd-shift-e",
+        "keep current settings as a variation",
+    ),
 ];
 
 /// Binds every shortcut.
@@ -77,5 +87,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(9), Gallery, c),
         KeyBinding::new(k(10), Undo, c),
         KeyBinding::new(k(11), Redo, c),
+        KeyBinding::new(k(12), Variations, c),
+        KeyBinding::new(k(13), KeepVariation, c),
     ]);
 }
