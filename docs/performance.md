@@ -108,8 +108,14 @@ among the candidates) against the exact linear search, over all 16,777,216 RGB c
 "Extra distance" is how much farther the color picked by the table is than the right
 one, in the metric's own units (RGB metrics on `0..1` channels, squared). For CIE76 the
 unit is squared LAB distance, so 90.9 is about 9.5 delta E: the table cells are cubes in
-RGB, which are not where LAB metrics draw their borders. That is fine for the preview
-while dragging, which uses a cheap RGB metric anyway, and never used for export.
+RGB, which are not where LAB metrics draw their borders.
+
+The pipeline does not use the table. Building it takes 11 to 134 ms, while mapping a
+64x64 result with the exact search behind the cache takes about 1.5 ms (4096 pixels at
+361 ns, from the table below), and even a 512x512 result is under 100 ms. It only pays
+off when one palette maps millions of pixels, so it stays in the engine as
+`color::Lut` for that case. The live preview gets its speed from the cache and from
+using redmean while a slider moves.
 
 Per lookup, one thread, web-216 with redmean on a 1024x1024 synthetic photo:
 

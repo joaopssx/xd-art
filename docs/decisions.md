@@ -336,3 +336,12 @@ app, Ctrl+Shift+L switches between the two and the choice is saved in the config
 
 What stays in English is listed in `CONTRIBUTING.md`: mainly names that are also
 command line values, engine error messages and machine-readable output.
+
+## 2026-11-13: the 3D lookup table is not used by the pipeline (P9)
+
+`color::Lut` was built and measured (`docs/performance.md`) to speed up the preview.
+While writing the algorithm guide I found that nothing calls it: the preview became fast
+enough with the exact cache and a cheap metric while dragging, and for pixel art sizes
+the table takes longer to build than the whole exact search. The earlier docs said the
+preview used it; they now say what is true. The table stays in the engine for callers
+that map far more pixels with one palette.

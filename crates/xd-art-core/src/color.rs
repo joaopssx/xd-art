@@ -459,7 +459,11 @@ const LUT_SIDE: usize = 32;
 /// Most candidates kept per cell.
 const LUT_CANDIDATES: usize = 8;
 
-/// A 32x32x32 table over RGB for fast approximate mapping, used by the live preview.
+/// A 32x32x32 table over RGB for fast approximate mapping.
+///
+/// The pipeline does not use it: at the output sizes pixel art has, building the table
+/// costs more than the exact search behind [`Cache`] (see `docs/performance.md`). It is
+/// here for callers that map many more pixels with one palette.
 ///
 /// Each cell keeps the palette colors that are closest to its center or to one of its
 /// corners (up to eight). A lookup measures the exact distance to those candidates
