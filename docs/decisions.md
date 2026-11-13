@@ -345,3 +345,11 @@ enough with the exact cache and a cheap metric while dragging, and for pixel art
 the table takes longer to build than the whole exact search. The earlier docs said the
 preview used it; they now say what is true. The table stays in the engine for callers
 that map far more pixels with one palette.
+
+## 2026-11-13: the system's reduce-motion setting (U14)
+
+The app had its own switch for transitions (Ctrl+Shift+M) but did not look at the
+system, which the specification asked for where possible. On Windows it now also turns
+transitions off when "Show animations in Windows" is off (`SPI_GETCLIENTAREAANIMATION`,
+read once at startup). gpui does not expose the equivalent setting on macOS or Linux,
+so there only the app's switch applies.
