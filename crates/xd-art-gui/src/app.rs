@@ -25,6 +25,7 @@ use crate::assets::icon;
 use crate::config::Config;
 use crate::panels::{Choice, Section, Toggle};
 use crate::preview::Viewer;
+use crate::strip::Strip;
 use crate::theme::{self, Palette, Theme};
 use crate::widgets::{Slider, SliderEvent, SliderSpec};
 
@@ -164,6 +165,8 @@ pub struct Root {
     last_run: Option<(Duration, Report)>,
     /// The image shown came from the reduced copy or a cheaper metric.
     approximate: bool,
+    /// The palette strip.
+    pub(crate) strip: Strip,
 }
 
 /// Wait after the last change before the exact conversion starts, so a burst of
@@ -220,6 +223,7 @@ impl Root {
             pipeline: Arc::new(Mutex::new(Pipeline::default())),
             last_run: None,
             approximate: false,
+            strip: Strip::default(),
         }
     }
 
@@ -511,7 +515,18 @@ impl Root {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         let report = p.run(&src, sid, &settings, &cancel)?;
-                        Ok::<_, xd_art_core::Error>((report, p.output().cloned()))
+                        let palette = p.palette().map(<[[u8; 3]]>::to_vec).unwrap_or_default();
+                        let mut counts = vec![0u64; palette.len()];
+                        if let Some(ix) = p.indexed() {
+                            for (i, &c) in ix.index.iter().enumerate() {
+                                if !ix.is_clear(i)
+                                    && let Some(n) = counts.get_mut(c as usize)
+                                {
+                                    *n += 1;
+                                }
+                            }
+                        }
+                        Ok::<_, xd_art_core::Error>((report, p.output().cloned(), palette, counts))
                     })
                     .await;
                 let shown = this.update(cx, |root, cx| {
@@ -519,13 +534,15 @@ impl Root {
                         return false;
                     }
                     match result {
-                        Ok((report, Some(out))) => {
+                        Ok((report, Some(out), palette, counts)) => {
                             root.output = Some(Arc::new(out));
+                            root.strip.colors = palette;
+                            root.strip.counts = counts;
                             root.last_run = Some((started.elapsed(), report));
                             root.approximate = sid != id || !exact_metric || step < last;
                             root.notice = None;
                         }
-                        Ok((_, None)) | Err(xd_art_core::Error::Cancelled) => return false,
+                        Ok((_, None, _, _)) | Err(xd_art_core::Error::Cancelled) => return false,
                         Err(e) => root.notice = Some(e.to_string().into()),
                     }
                     cx.notify();
@@ -603,6 +620,11 @@ impl Root {
             let v = (c.read)(&self.settings);
             c.slider.update(cx, |s, cx| s.set_value(v, cx));
         }
+    }
+
+    /// The root's focus handle, for widgets that type into the root.
+    pub(crate) fn focus_handle(&self) -> FocusHandle {
+        self.focus.clone()
     }
 
     /// Writes the config half a second after the last change, on a background thread.
@@ -1080,7 +1102,8 @@ impl Root {
             .id("preview")
             .flex_1()
             .min_w_0()
-            .h_full()
+            .min_h_0()
+            .w_full()
             .overflow_hidden()
             .bg(t.base)
             .on_scroll_wheel(cx.listener(Self::on_wheel))
@@ -1232,7 +1255,17 @@ impl Render for Root {
         if self.layout.left_open {
             middle = middle.child(self.panel(Side::Left, t, cx));
         }
-        middle = middle.child(self.preview(t, cx));
+        middle = middle.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(self.preview(t, cx))
+                .when(self.output.is_some(), |d| {
+                    d.child(self.palette_strip(t, cx))
+                }),
+        );
         if self.layout.right_open {
             middle = middle.child(self.panel(Side::Right, t, cx));
         }

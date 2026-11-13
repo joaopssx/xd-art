@@ -12,6 +12,7 @@ pub mod assets;
 pub mod config;
 pub mod panels;
 pub mod preview;
+pub mod strip;
 pub mod theme;
 pub mod widgets;
 
