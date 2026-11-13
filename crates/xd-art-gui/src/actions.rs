@@ -24,6 +24,8 @@ actions!(
         ZoomOut,
         /// Show or hide the pixel grid.
         ToggleGrid,
+        /// Cycle the before and after comparison: divider, source only, off.
+        Compare,
     ]
 );
 
@@ -40,6 +42,11 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("ctrl-=", "cmd-=", "zoom in"),
     ("ctrl--", "cmd--", "zoom out"),
     ("ctrl-g", "cmd-g", "show or hide the pixel grid"),
+    (
+        "ctrl-b",
+        "cmd-b",
+        "before and after: divider, source only, off",
+    ),
 ];
 
 /// Binds every shortcut.
@@ -57,5 +64,6 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new(k(5), ZoomIn, c),
         KeyBinding::new(k(6), ZoomOut, c),
         KeyBinding::new(k(7), ToggleGrid, c),
+        KeyBinding::new(k(8), Compare, c),
     ]);
 }

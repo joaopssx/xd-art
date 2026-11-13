@@ -19,7 +19,7 @@ use xd_art_core::settings::{DitherMode, PaletteSource, SampleMode, Settings, Siz
 
 use crate::Marks;
 use crate::actions::{
-    self, ActualSize, Fit, Open, ToggleGrid, ToggleLeft, ToggleRight, ZoomIn, ZoomOut,
+    self, ActualSize, Compare, Fit, Open, ToggleGrid, ToggleLeft, ToggleRight, ZoomIn, ZoomOut,
 };
 use crate::assets::icon;
 use crate::config::Config;
@@ -839,6 +839,10 @@ impl Root {
     }
 
     fn start_pan(&mut self, e: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if e.button == MouseButton::Left && self.viewer.near_split(e.position.x) {
+            self.viewer.dragging_split = true;
+            return;
+        }
         if e.button == MouseButton::Middle || (e.button == MouseButton::Left && self.viewer.space) {
             self.viewer.panning = Some(e.position);
             cx.notify();
@@ -856,6 +860,15 @@ impl Root {
     }
 
     fn on_move(&mut self, e: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.viewer.dragging_split {
+            if e.pressed_button.is_none() {
+                self.viewer.dragging_split = false;
+            } else {
+                self.viewer.split_at(e.position.x);
+                cx.notify();
+            }
+            return;
+        }
         if let Some(last) = self.viewer.panning {
             if e.pressed_button.is_none() {
                 self.viewer.panning = None;
@@ -927,6 +940,14 @@ impl Root {
             .child(
                 button("open", "open", false)
                     .on_click(cx.listener(|this, _, window, cx| this.prompt_open(window, cx))),
+            )
+            .child(
+                button("compare", "compare", self.viewer.compare.is_some()).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.viewer.cycle_compare();
+                        cx.notify();
+                    },
+                )),
             )
             .child(
                 div()
@@ -1071,7 +1092,12 @@ impl Root {
         if let Doc::Ready { image, .. } = &self.doc {
             let bg = [t.base.r, t.base.g, t.base.b].map(|v| (v * 255.0).round() as u8);
             let shown = self.output.clone().unwrap_or_else(|| image.clone());
-            return base.child(self.viewer.element(shown, bg));
+            let before = self
+                .output
+                .as_ref()
+                .and(self.viewer.compare)
+                .map(|_| image.clone());
+            return base.child(self.viewer.element(shown, before, bg));
         }
         base.flex()
             .flex_col()
@@ -1235,6 +1261,10 @@ impl Render for Root {
                 this.viewer.zoom_step(false);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &Compare, _, cx| {
+                this.viewer.cycle_compare();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &ToggleGrid, _, cx| {
                 this.viewer.grid = !this.viewer.grid;
                 cx.notify();
@@ -1269,6 +1299,7 @@ impl Render for Root {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     this.viewer.panning = None;
+                    this.viewer.dragging_split = false;
                     if this.resizing.take().is_some() {
                         this.persist(cx);
                         cx.notify();
